@@ -28,11 +28,11 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
   
 // Load the routes from the routes folder
-app.use("/tutorial", routes); 
+app.use("/workerscheduling-t2", routes); 
 
 
 // set port, listen for requests
-const PORT = process.env.PORT || 3100;
+const PORT = process.env.PORT || 3132;
 if (process.env.NODE_ENV !== "test") {
   app.listen(PORT, () => {
     logger.info(`Server is running on port ${PORT}`);
