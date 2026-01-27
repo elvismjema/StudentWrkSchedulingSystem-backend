@@ -21,21 +21,22 @@ exports.login = async (req, res) => {
   var googleToken = req.body.credential;
 
   const client = new OAuth2Client(google_id);
-  async function verify() {
+  try {
     const ticket = await client.verifyIdToken({
       idToken: googleToken,
       audience: google_id,
     });
     googleUser = ticket.getPayload();
     logger.debug(`Google authentication successful for email: ${googleUser.email}`);
-  }
-  await verify().catch((err) => {
+  } catch (err) {
     logger.error(`Google token verification failed: ${err.message}`);
-  });
+    res.status(401).send({ message: "Google authentication failed." });
+    return;
+  }
 
-  let email = googleUser.email;
-  let firstName = googleUser.given_name;
-  let lastName = googleUser.family_name;
+  let email = googleUser?.email || "";
+  let firstName = googleUser?.given_name || "";
+  let lastName = googleUser?.family_name || "";
 
   // if we don't have their email or name, we need to make another request
   // this is solely for testing purposes
@@ -46,18 +47,28 @@ exports.login = async (req, res) => {
     req.body.accessToken !== undefined
   ) {
     logger.debug('Fetching additional user info from Google API');
-    let oauth2Client = new OAuth2Client(google_id); // create new auth client
-    oauth2Client.setCredentials({ access_token: req.body.accessToken }); // use the new auth client with the access_token
-    let oauth2 = google.oauth2({
-      auth: oauth2Client,
-      version: "v2",
-    });
-    let { data } = await oauth2.userinfo.get(); // get user info
-    logger.debug(`Retrieved user info from Google: ${data.email}`);
-    email = data.email;
-    firstName = data.given_name;
-    lastName = data.family_name;
+    try {
+      let oauth2Client = new OAuth2Client(google_id); // create new auth client
+      oauth2Client.setCredentials({ access_token: req.body.accessToken }); // use the new auth client with the access_token
+      let oauth2 = google.oauth2({
+        auth: oauth2Client,
+        version: "v2",
+      });
+      let { data } = await oauth2.userinfo.get(); // get user info
+      logger.debug(`Retrieved user info from Google: ${data.email}`);
+      email = data.email || email;
+      firstName = data.given_name || firstName;
+      lastName = data.family_name || lastName;
+    } catch (err) {
+      logger.error(`Error fetching user info from Google API: ${err.message}`);
+    }
   }
+
+  const fullName = googleUser?.name || "";
+  if (!firstName && fullName) firstName = fullName.split(" ")[0];
+  if (!lastName && fullName) lastName = fullName.split(" ").slice(1).join(" ");
+  if (!firstName) firstName = email ? email.split("@")[0] : "User";
+  if (!lastName) lastName = "User";
 
 
   let user = {};
@@ -65,126 +76,121 @@ exports.login = async (req, res) => {
 
   logger.debug(`Looking up user by email: ${email}`);
   
-  await User.findOne({
-    where: {
-      email: email,
-    },
-  })
-    .then((data) => {
-      if (data != null) {
-        user = data.dataValues;
-        logger.debug(`Existing user found: ${email}`);
-      } else {
-        // create a new User and save to database
-        user = {
-          fName: firstName,
-          lName: lastName,
-          email: email,
-        };
-        logger.debug(`New user to be created: ${email}`);
-      }
-    })
-    .catch((err) => {
-      logger.error(`Error finding user: ${err.message}`);
-      res.status(500).send({ message: err.message });
-      return;
+  try {
+    const data = await User.findOne({
+      where: {
+        email: email,
+      },
     });
+    if (data != null) {
+      user = data.dataValues;
+      logger.debug(`Existing user found: ${email}`);
+    } else {
+      // create a new User and save to database
+      user = {
+        fName: firstName,
+        lName: lastName,
+        email: email,
+      };
+      logger.debug(`New user to be created: ${email}`);
+    }
+  } catch (err) {
+    logger.error(`Error finding user: ${err.message}`);
+    res.status(500).send({ message: err.message });
+    return;
+  }
 
   // this lets us get the user id
   if (user.id === undefined) {
     logger.info(`Creating new user: ${user.email}`);
     
-    await User.create(user)
-      .then((data) => {
-        user = data.dataValues;
-        logger.info(`User registered successfully: ${user.id} - ${user.email}`);
-      })
-      .catch((err) => {
-        logger.error(`Error creating user: ${err.message}`);
-        res.status(500).send({ message: err.message });
-        return;
-      });
+    try {
+      const data = await User.create(user);
+      user = data.dataValues;
+      logger.info(`User registered successfully: ${user.id} - ${user.email}`);
+    } catch (err) {
+      logger.error(`Error creating user: ${err.message}`);
+      res.status(500).send({ message: err.message });
+      return;
+    }
   } else {
     
     // doing this to ensure that the user's name is the one listed with Google
     user.fName = firstName;
     user.lName = lastName;
   
-    await User.update(user, { where: { id: user.id } })
-      .then((num) => {
-        if (num == 1) {
-          logger.info(`Updated user name: ${user.id}`);
-        } else {
-          logger.warn(`Cannot update user with id=${user.id}. User not found or empty body`);
-        }
-      })
-      .catch((err) => {
-        logger.error(`Error updating user ${user.id}: ${err.message}`);
-      });
+    try {
+      const num = await User.update(user, { where: { id: user.id } });
+      if (num == 1) {
+        logger.info(`Updated user name: ${user.id}`);
+      } else {
+        logger.warn(`Cannot update user with id=${user.id}. User not found or empty body`);
+      }
+    } catch (err) {
+      logger.error(`Error updating user ${user.id}: ${err.message}`);
+    }
   }
 
   // try to find session first
   logger.debug(`Looking for existing session for: ${email}`);
 
-  await Session.findOne({
-    where: {
-      email: email,
-      token: { [Op.ne]: "" },
-    },
-  })
-    .then(async (data) => {
-      if (data !== null) {
-        session = data.dataValues;
-        if (session.expirationDate < Date.now()) {
-          logger.info(`Session expired for ${email}, clearing token`);
-          session.token = "";
-          // clear session's token if it's expired
-          await Session.update(session, { where: { id: session.id } })
-            .then((num) => {
-              if (num == 1) {
-                logger.info('Expired session cleared successfully');
-              } else {
-                logger.error('Failed to clear expired session');
-                res.send({
-                  message: `Error logging out user.`,
-                });
-                return;
-              }
-            })
-            .catch((err) => {
-              logger.error(`Error clearing expired session: ${err.message}`);
-              res.status(500).send({
-                message: "Error logging out user.",
-              });
-              return;
+  try {
+    const data = await Session.findOne({
+      where: {
+        email: email,
+        token: { [Op.ne]: "" },
+      },
+    });
+    if (data !== null) {
+      session = data.dataValues;
+      if (session.expirationDate < Date.now()) {
+        logger.info(`Session expired for ${email}, clearing token`);
+        session.token = "";
+        // clear session's token if it's expired
+        try {
+          const num = await Session.update(session, { where: { id: session.id } });
+          if (num == 1) {
+            logger.info('Expired session cleared successfully');
+          } else {
+            logger.error('Failed to clear expired session');
+            res.send({
+              message: `Error logging out user.`,
             });
-          //reset session to be null since we need to make another one
-          session = {};
-        } else {
-          // if the session is still valid, then send info to the front end
-          let userInfo = {
-            email: user.email,
-            fName: user.fName,
-            lName: user.lName,
-            userId: user.id,
-            token: session.token,
-            // refresh_token: user.refresh_token,
-            // expiration_date: user.expiration_date
-          };
-          logger.info(`Valid session found for ${email}, reusing existing session`);
-          res.send(userInfo);
+            return;
+          }
+        } catch (err) {
+          logger.error(`Error clearing expired session: ${err.message}`);
+          res.status(500).send({
+            message: "Error logging out user.",
+          });
           return;
         }
+        //reset session to be null since we need to make another one
+        session = {};
+      } else {
+        // if the session is still valid, then send info to the front end
+        let userInfo = {
+          email: user.email,
+          fName: user.fName,
+          lName: user.lName,
+          userId: user.id,
+          token: session.token,
+          // refresh_token: user.refresh_token,
+          // expiration_date: user.expiration_date
+        };
+        logger.info(`Valid session found for ${email}, reusing existing session`);
+        res.send(userInfo);
+        return;
       }
-    })
-    .catch((err) => {
-      logger.error(`Error retrieving session: ${err.message}`);
-      res.status(500).send({
-        message:
-          err.message || "Some error occurred while retrieving sessions.",
-      });
-      return;
+    }
+  } catch (err) {
+    logger.error(`Error retrieving session: ${err.message}`);
+    res.status(500).send({
+      message:
+        err.message || "Some error occurred while retrieving sessions.",
     });
+    return;
+  }
 
   if (session.id === undefined) {
     // create a new Session with an expiration date and save to database
@@ -203,24 +209,23 @@ exports.login = async (req, res) => {
 
     logger.debug(`Session created with expiration: ${tempExpirationDate}`);
 
-    await Session.create(newSession)
-      .then(() => {
-        let userInfo = {
-          email: user.email,
-          fName: user.fName,
-          lName: user.lName,
-          userId: user.id,
-          token: token,
-          // refresh_token: user.refresh_token,
-          // expiration_date: user.expiration_date
-        };
-        logger.info(`Login successful for user: ${user.email}`);
-        res.send(userInfo);
-      })
-      .catch((err) => {
-        logger.error(`Error creating session: ${err.message}`);
-        res.status(500).send({ message: err.message });
-      });
+    try {
+      await Session.create(newSession);
+      let userInfo = {
+        email: user.email,
+        fName: user.fName,
+        lName: user.lName,
+        userId: user.id,
+        token: token,
+        // refresh_token: user.refresh_token,
+        // expiration_date: user.expiration_date
+      };
+      logger.info(`Login successful for user: ${user.email}`);
+      res.send(userInfo);
+    } catch (err) {
+      logger.error(`Error creating session: ${err.message}`);
+      res.status(500).send({ message: err.message });
+    }
   }
 };
 
