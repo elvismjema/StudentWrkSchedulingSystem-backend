@@ -24,30 +24,33 @@ jobs:
 
       - name: Validate env vars
         run: |
-          if [ -z "${DB_HOST}" ] || [ -z "${DB_USER}" ] || [ -z "${DB_PW}" ] || [ -z "${DB_NAME}" ] || [ -z "${CLIENT_ID}" ] || [ -z "${CLIENT_SECRET}" ] || [ -z "${PORT}" ]; then
+          if [ -z "${DB_HOST}" ] || [ -z "${DB_USER}" ] || [ -z "${DB_PW}" ] || [ -z "${DB_NAME}" ] || [ -z "${CLIENT_ID}" ] || [ -z "${CLIENT_SECRET}" ]; then
             echo "Missing one or more required secrets"; exit 1;
           fi
         env:
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PW: ${{ secrets.DB_PW }}
-          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_HOST: ${{ secrets.AWS_DB_HOST }}
+          DB_PORT: ${{ secrets.AWS_DB_PORT }}
+          DB_USER: ${{ secrets.AWS_DB_USER }}
+          DB_PW: ${{ secrets.AWS_DB_PW }}
+          DB_NAME: ${{ secrets.AWS_DB_NAME }}
           CLIENT_ID: ${{ secrets.CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
-          PORT: ${{ secrets.PORT }}
 
       - name: Write production env
         run: |
+          DB_PORT="${{ secrets.AWS_DB_PORT }}"
+          if [ -z "${DB_PORT}" ]; then DB_PORT="3306"; fi
+          PORT="${{ secrets.PORT }}"
+          if [ -z "${PORT}" ]; then PORT="3132"; fi
           cat <<EOF > .env
-          DB_HOST=${{ secrets.DB_HOST }}
-          DB_PORT=${{ secrets.DB_PORT }}
-          DB_USER=${{ secrets.DB_USER }}
-          DB_PW=${{ secrets.DB_PW }}
-          DB_NAME=${{ secrets.DB_NAME }}
+          DB_HOST=${{ secrets.AWS_DB_HOST }}
+          DB_PORT=${DB_PORT}
+          DB_USER=${{ secrets.AWS_DB_USER }}
+          DB_PW=${{ secrets.AWS_DB_PW }}
+          DB_NAME=${{ secrets.AWS_DB_NAME }}
           CLIENT_ID=${{ secrets.CLIENT_ID }}
           CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}
-          PORT=${{ secrets.PORT }}
+          PORT=${PORT}
           EOF
 
       - name: Bundle deploy artifacts
