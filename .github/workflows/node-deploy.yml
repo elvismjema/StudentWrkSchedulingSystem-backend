@@ -1,0 +1,51 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bundle deploy artifacts
+        run: npm run bundle
+
+      - name: Deploy to server
+        uses: easingthemes/ssh-deploy@v4.1.10
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          ARGS: "-rltgoDzvO --delete"
+          SOURCE: "deploy/"
+          REMOTE_HOST: "workerscheduling.eaglesoftwareteam.com"
+          REMOTE_USER: "ubuntu"
+          TARGET: "/home/ubuntu/nodeapps/sev2026/t2"
+
+      - name: Install + restart service
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: workerscheduling.eaglesoftwareteam.com
+          username: ubuntu
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+            cd /home/ubuntu/nodeapps/sev2026/t2
+            npm ci --omit=dev
+            sudo cp workerscheduling-t2-backend.service /etc/systemd/system/workerscheduling-t2-backend.service
+            sudo systemctl daemon-reload
+            sudo systemctl enable workerscheduling-t2-backend
+            sudo systemctl restart workerscheduling-t2-backend
