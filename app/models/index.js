@@ -7,8 +7,8 @@ import sequelize from "../config/sequelizeInstance.js";
 import User from "./user.model.js";
 import Session from "./session.model.js";
 import Tutorial from "./tutorial.model.js";
-import Lesson from "./lesson.model.js"; 
-
+import Lesson from "./lesson.model.js";
+import Notification from "./notification.model.js";
 
 const db = {};
 db.Sequelize = Sequelize;
@@ -18,6 +18,7 @@ db.user = User;
 db.session = Session;
 db.tutorial = Tutorial;
 db.lesson = Lesson;
+db.notification = Notification;
 
 // foreign key for session
 db.user.hasMany(
@@ -53,6 +54,19 @@ db.lesson.belongsTo(
   db.tutorial,
   { as: "tutorial" },
   { foreignKey: { allowNull: false }, onDelete: "CASCADE" }
+);
+
+// Notification relationships
+db.user.hasMany(
+  db.notification,
+  { as: "notifications" },
+  { foreignKey: { name: 'userId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+db.notification.belongsTo(
+  db.user,
+  { as: "user" },
+  { foreignKey: { name: 'userId', allowNull: false }, onDelete: "CASCADE" }
 );
 
 export default db;

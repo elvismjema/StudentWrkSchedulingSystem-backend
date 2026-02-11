@@ -14,12 +14,20 @@ const app = express();
 // HTTP request logger middleware
 app.use(morgan('combined', { stream: logger.stream }));
 
-// Also use the cors middleware as backup
+// CORS configuration with preflight support
 var corsOptions = {
   origin: "http://localhost:8081",
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  optionsSuccessStatus: 200 // Some legacy browsers (IE11, various SmartTVs) choke on 204
 }
+
+// Apply CORS with the updated options
 app.use(cors(corsOptions));
+
+// Handle preflight requests
+app.options('*', cors(corsOptions));
 
 
 // parse requests of content-type - application/json
