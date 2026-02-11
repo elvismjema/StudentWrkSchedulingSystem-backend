@@ -34,8 +34,8 @@ exports.login = async (req, res) => {
   });
 
   let email = googleUser.email;
-  let firstName = googleUser.given_name;
-  let lastName = googleUser.family_name;
+  let firstName = googleUser.given_name || "User";
+  let lastName = googleUser.family_name || "";
 
   // if we don't have their email or name, we need to make another request
   // this is solely for testing purposes
@@ -55,8 +55,8 @@ exports.login = async (req, res) => {
     let { data } = await oauth2.userinfo.get(); // get user info
     logger.debug(`Retrieved user info from Google: ${data.email}`);
     email = data.email;
-    firstName = data.given_name;
-    lastName = data.family_name;
+    firstName = data.given_name || "User";
+    lastName = data.family_name || "";
   }
 
 
@@ -87,8 +87,9 @@ exports.login = async (req, res) => {
     .catch((err) => {
       logger.error(`Error finding user: ${err.message}`);
       res.status(500).send({ message: err.message });
-      return;
     });
+
+  if (res.headersSent) return;
 
   // this lets us get the user id
   if (user.id === undefined) {
@@ -102,9 +103,12 @@ exports.login = async (req, res) => {
       .catch((err) => {
         logger.error(`Error creating user: ${err.message}`);
         res.status(500).send({ message: err.message });
-        return;
       });
-  } else {
+  }
+
+  if (res.headersSent) return;
+
+  if (user.id !== undefined) {
     
     // doing this to ensure that the user's name is the one listed with Google
     user.fName = firstName;
@@ -122,6 +126,8 @@ exports.login = async (req, res) => {
         logger.error(`Error updating user ${user.id}: ${err.message}`);
       });
   }
+
+  if (res.headersSent) return;
 
   // try to find session first
   logger.debug(`Looking for existing session for: ${email}`);
@@ -183,8 +189,9 @@ exports.login = async (req, res) => {
         message:
           err.message || "Some error occurred while retrieving sessions.",
       });
-      return;
     });
+
+  if (res.headersSent) return;
 
   if (session.id === undefined) {
     // create a new Session with an expiration date and save to database

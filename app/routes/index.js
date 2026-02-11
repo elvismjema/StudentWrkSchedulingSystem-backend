@@ -5,6 +5,7 @@ import UserRoutes from "./user.routes.js";
 import TutorialRoutes from "./tutorial.routes.js";
 import LessonRoutes from "./lesson.routes.js";
 import NotificationRoutes from "./notification.routes.js";
+import AvailabilityRoutes from "./availability.routes.js";
 
 const router = Router();
 
@@ -14,5 +15,6 @@ router.use("/users", UserRoutes);
 router.use("/tutorials", TutorialRoutes);
 router.use("/tutorials", LessonRoutes);
 router.use("/notifications", NotificationRoutes);
+router.use("/availabilities", AvailabilityRoutes);
 
 export default router;

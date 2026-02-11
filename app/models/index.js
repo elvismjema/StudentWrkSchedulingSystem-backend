@@ -9,6 +9,7 @@ import Session from "./session.model.js";
 import Tutorial from "./tutorial.model.js";
 import Lesson from "./lesson.model.js";
 import Notification from "./notification.model.js";
+import Availability from "./availability.model.js";
 
 const db = {};
 db.Sequelize = Sequelize;
@@ -19,6 +20,7 @@ db.session = Session;
 db.tutorial = Tutorial;
 db.lesson = Lesson;
 db.notification = Notification;
+db.availability = Availability;
 
 // foreign key for session
 db.user.hasMany(
@@ -67,6 +69,31 @@ db.notification.belongsTo(
   db.user,
   { as: "user" },
   { foreignKey: { name: 'userId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+// Availability relationships
+// User can have many availabilities
+db.user.hasMany(
+  db.availability,
+  { as: "availabilities" },
+  { foreignKey: { name: 'userId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+db.availability.belongsTo(
+  db.user,
+  { as: "user" },
+  { foreignKey: { name: 'userId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+// User can approve many availabilities (approvedBy relationship)
+db.user.hasMany(
+  db.availability,
+  { as: "approvedAvailabilities", foreignKey: 'approvedBy' }
+);
+
+db.availability.belongsTo(
+  db.user,
+  { as: "approver", foreignKey: 'approvedBy' }
 );
 
 export default db;
