@@ -7,7 +7,15 @@ import morgan from "morgan";
 import db  from "./app/models/index.js";
 import logger from "./app/config/logger.js";
 
-db.sequelize.sync();
+db.sequelize.sync({ alter: true })
+  .then(() => {
+    logger.info('Database synchronized successfully');
+    logger.info('Models in sync: ' + Object.keys(db).filter(key => typeof db[key] === 'object' && db[key] !== null && 'tableName' in db[key]).join(', '));
+  })
+  .catch(err => {
+    logger.error('Error syncing database:', err);
+    process.exit(1); // Exit if we can't sync the database
+  });
 
 const app = express();
 
