@@ -11,6 +11,7 @@ import Notification from "./notification.model.js";
 import TimeDiscrepancy from "./time_discrepancy.model.js";
 import ClockRecord from "./clock_record.model.js";
 import Shift from "./shift.model.js";
+import Availability from "./availability.model.js";
 
 const db = {};
 db.Sequelize = Sequelize;
@@ -24,6 +25,7 @@ db.notification = Notification;
 db.timeDiscrepancy = TimeDiscrepancy;
 db.clockRecord = ClockRecord;
 db.shift = Shift;
+db.availability = Availability;
 
 // foreign key for session
 db.user.hasMany(
@@ -73,6 +75,7 @@ db.notification.belongsTo(
   { as: "user" },
   { foreignKey: { name: 'userId', allowNull: false }, onDelete: "CASCADE" }
 );
+
 
 // Time Discrepancy relationships
 db.timeDiscrepancy.belongsTo(db.clockRecord, {
@@ -128,5 +131,31 @@ db.clockRecord.belongsTo(db.user, {
   as: "user",
   onDelete: "CASCADE"
 });
+
+// Availability relationships
+// User can have many availabilities
+db.user.hasMany(
+  db.availability,
+  { as: "availabilities" },
+  { foreignKey: { name: 'userId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+db.availability.belongsTo(
+  db.user,
+  { as: "user" },
+  { foreignKey: { name: 'userId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+// User can approve many availabilities (approvedBy relationship)
+db.user.hasMany(
+  db.availability,
+  { as: "approvedAvailabilities", foreignKey: 'approvedBy' }
+);
+
+db.availability.belongsTo(
+  db.user,
+  { as: "approver", foreignKey: 'approvedBy' }
+);
+
 
 export default db;
