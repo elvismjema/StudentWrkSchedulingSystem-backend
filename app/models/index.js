@@ -11,6 +11,8 @@ import Notification from "./notification.model.js";
 import TimeDiscrepancy from "./time_discrepancy.model.js";
 import ClockRecord from "./clock_record.model.js";
 import Shift from "./shift.model.js";
+import Department from "./department.model.js";
+import ScheduleTemplate from "./schedule_template.model.js";
 
 const db = {};
 db.Sequelize = Sequelize;
@@ -24,6 +26,8 @@ db.notification = Notification;
 db.timeDiscrepancy = TimeDiscrepancy;
 db.clockRecord = ClockRecord;
 db.shift = Shift;
+db.department = Department;
+db.scheduleTemplate = ScheduleTemplate;
 
 // foreign key for session
 db.user.hasMany(
@@ -127,6 +131,30 @@ db.clockRecord.belongsTo(db.user, {
   foreignKey: "user_id",
   as: "user",
   onDelete: "CASCADE"
+});
+
+// Department relationships
+db.department.hasMany(db.scheduleTemplate, {
+  foreignKey: "department_id",
+  as: "scheduleTemplates"
+});
+
+// Schedule Template relationships
+db.scheduleTemplate.belongsTo(db.department, {
+  foreignKey: "department_id",
+  as: "department",
+  onDelete: "CASCADE"
+});
+
+db.scheduleTemplate.belongsTo(db.user, {
+  foreignKey: "created_by",
+  as: "creator",
+  onDelete: "CASCADE"
+});
+
+db.user.hasMany(db.scheduleTemplate, {
+  foreignKey: "created_by",
+  as: "createdScheduleTemplates"
 });
 
 export default db;
