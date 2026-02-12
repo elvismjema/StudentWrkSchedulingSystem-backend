@@ -9,6 +9,7 @@ import TimeDiscrepancyRoutes from "./time_discrepancy.routes.js";
 import AvailabilityRoutes from "./availability.routes.js";
 import ShiftRoutes from "./shift.routes.js";
 import ScheduleGapAlertRoutes from "./scheduleGapAlert.routes.js";
+import ShiftAcknowledgementRoutes from "./shiftAcknowledgement.routes.js";
 
 const router = Router();
 
@@ -22,5 +23,6 @@ router.use("/time_discrepancies", TimeDiscrepancyRoutes);
 router.use("/availabilities", AvailabilityRoutes);
 router.use("/shifts", ShiftRoutes);
 router.use("/schedule-gap-alerts", ScheduleGapAlertRoutes);
+router.use("/shift-acknowledgements", ShiftAcknowledgementRoutes);
 
 export default router;
