@@ -125,15 +125,39 @@ db.user.hasMany(db.timeDiscrepancy, {
 });
 
 // Shift relationships
-db.shift.hasMany(db.timeDiscrepancy, {
-  foreignKey: "shift_id",
-  as: "timeDiscrepancies"
+db.shift.belongsTo(db.department, {
+  foreignKey: "department_id",
+  as: "department",
+  onDelete: "CASCADE"
 });
 
 db.shift.belongsTo(db.user, {
-  foreignKey: "user_id",
-  as: "user",
+  foreignKey: "position_id",
+  as: "position",
   onDelete: "CASCADE"
+});
+
+db.shift.belongsTo(db.scheduleTemplate, {
+  foreignKey: "template_id",
+  as: "template",
+  onDelete: "SET NULL"
+});
+
+db.shift.belongsTo(db.user, {
+  foreignKey: "assigned_user_id",
+  as: "assignedUser",
+  onDelete: "SET NULL"
+});
+
+db.shift.belongsTo(db.user, {
+  foreignKey: "created_by",
+  as: "creator",
+  onDelete: "CASCADE"
+});
+
+db.shift.hasMany(db.timeDiscrepancy, {
+  foreignKey: "shift_id",
+  as: "timeDiscrepancies"
 });
 
 db.clockRecord.belongsTo(db.user, {
