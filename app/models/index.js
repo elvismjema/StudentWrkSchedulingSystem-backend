@@ -16,6 +16,7 @@ import Department from "./department.model.js";
 import ScheduleTemplate from "./schedule_template.model.js";
 
 import Availability from "./availability.model.js";
+import ScheduleGapAlert from "./scheduleGapAlert.model.js";
 
 
 const db = {};
@@ -35,6 +36,7 @@ db.department = Department;
 db.scheduleTemplate = ScheduleTemplate;
 
 db.availability = Availability;
+db.scheduleGapAlert = ScheduleGapAlert;
 
 
 // foreign key for session
@@ -215,6 +217,29 @@ db.availability.belongsTo(
   db.user,
   { as: "approver", foreignKey: 'approvedBy' }
 );
+// Schedule Gap Alert relationships
+// Department can have many schedule gap alerts (will be activated when department model is complete)
+// db.department.hasMany(
+//   db.scheduleGapAlert,
+//   { as: "scheduleGapAlerts", foreignKey: 'departmentId' }
+// );
+
+// db.scheduleGapAlert.belongsTo(
+//   db.department,
+//   { as: "department", foreignKey: 'departmentId' }
+// );
+
+// Position can have many schedule gap alerts (will be activated when position model is complete)
+// db.position.hasMany(
+//   db.scheduleGapAlert,
+//   { as: "scheduleGapAlerts", foreignKey: 'positionId' }
+// );
+
+// db.scheduleGapAlert.belongsTo(
+//   db.position,
+//   { as: "position", foreignKey: 'positionId' }
+// );
+
 
 
 export default db;
