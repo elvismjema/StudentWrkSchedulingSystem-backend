@@ -17,6 +17,7 @@ import ScheduleTemplate from "./schedule_template.model.js";
 
 import Availability from "./availability.model.js";
 import ScheduleGapAlert from "./scheduleGapAlert.model.js";
+import ShiftAcknowledgement from "./shiftAcknowledgement.model.js";
 
 
 const db = {};
@@ -37,6 +38,7 @@ db.scheduleTemplate = ScheduleTemplate;
 
 db.availability = Availability;
 db.scheduleGapAlert = ScheduleGapAlert;
+db.shiftAcknowledgement = ShiftAcknowledgement;
 
 
 // foreign key for session
@@ -240,6 +242,28 @@ db.availability.belongsTo(
 //   { as: "position", foreignKey: 'positionId' }
 // );
 
+// Shift Acknowledgement relationships
+// Shift can have many acknowledgements
+db.shift.hasMany(
+  db.shiftAcknowledgement,
+  { as: "acknowledgements", foreignKey: { name: 'shiftId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+db.shiftAcknowledgement.belongsTo(
+  db.shift,
+  { as: "shift", foreignKey: { name: 'shiftId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+// User can have many shift acknowledgements
+db.user.hasMany(
+  db.shiftAcknowledgement,
+  { as: "shiftAcknowledgements", foreignKey: { name: 'userId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+db.shiftAcknowledgement.belongsTo(
+  db.user,
+  { as: "user", foreignKey: { name: 'userId', allowNull: false }, onDelete: "CASCADE" }
+);
 
 
 export default db;
