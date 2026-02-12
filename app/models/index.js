@@ -18,6 +18,7 @@ import ScheduleTemplate from "./schedule_template.model.js";
 import Availability from "./availability.model.js";
 import ScheduleGapAlert from "./scheduleGapAlert.model.js";
 import ShiftAcknowledgement from "./shiftAcknowledgement.model.js";
+import ConflictAlert from "./conflictAlert.model.js";
 
 
 const db = {};
@@ -39,6 +40,7 @@ db.scheduleTemplate = ScheduleTemplate;
 db.availability = Availability;
 db.scheduleGapAlert = ScheduleGapAlert;
 db.shiftAcknowledgement = ShiftAcknowledgement;
+db.conflictAlert = ConflictAlert;
 
 
 // foreign key for session
@@ -263,6 +265,62 @@ db.user.hasMany(
 db.shiftAcknowledgement.belongsTo(
   db.user,
   { as: "user", foreignKey: { name: 'userId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+// Conflict Alert relationships
+// User can have many conflict alerts
+db.user.hasMany(
+  db.conflictAlert,
+  { as: "conflictAlerts", foreignKey: { name: 'userId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+db.conflictAlert.belongsTo(
+  db.user,
+  { as: "user", foreignKey: { name: 'userId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+// Primary Shift relationship
+db.shift.hasMany(
+  db.conflictAlert,
+  { as: "conflictAlertsAsPrimary", foreignKey: { name: 'primaryShiftId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+db.conflictAlert.belongsTo(
+  db.shift,
+  { as: "primaryShift", foreignKey: { name: 'primaryShiftId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+// Conflicting Shift relationship (optional)
+db.shift.hasMany(
+  db.conflictAlert,
+  { as: "conflictAlertsAsConflicting", foreignKey: { name: 'conflictingShiftId' }, onDelete: "SET NULL" }
+);
+
+db.conflictAlert.belongsTo(
+  db.shift,
+  { as: "conflictingShift", foreignKey: { name: 'conflictingShiftId' }, onDelete: "SET NULL" }
+);
+
+// User who acknowledged the conflict
+db.user.hasMany(
+  db.conflictAlert,
+  { as: "acknowledgedConflicts", foreignKey: 'acknowledgedBy' }
+);
+
+db.conflictAlert.belongsTo(
+  db.user,
+  { as: "acknowledger", foreignKey: 'acknowledgedBy' }
+);
+
+// User who resolved the conflict
+db.user.hasMany(
+  db.conflictAlert,
+  { as: "resolvedConflicts", foreignKey: 'resolvedBy' }
+);
+
+db.conflictAlert.belongsTo(
+  db.user,
+  { as: "resolver", foreignKey: 'resolvedBy' }
 );
 
 
