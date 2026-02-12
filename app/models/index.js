@@ -19,6 +19,7 @@ import Availability from "./availability.model.js";
 import ScheduleGapAlert from "./scheduleGapAlert.model.js";
 import ShiftAcknowledgement from "./shiftAcknowledgement.model.js";
 import ConflictAlert from "./conflictAlert.model.js";
+import ShiftTask from "./shiftTask.model.js";
 
 
 const db = {};
@@ -41,6 +42,7 @@ db.availability = Availability;
 db.scheduleGapAlert = ScheduleGapAlert;
 db.shiftAcknowledgement = ShiftAcknowledgement;
 db.conflictAlert = ConflictAlert;
+db.shiftTask = ShiftTask;
 
 
 // foreign key for session
@@ -321,6 +323,40 @@ db.user.hasMany(
 db.conflictAlert.belongsTo(
   db.user,
   { as: "resolver", foreignKey: 'resolvedBy' }
+);
+
+// Shift Task relationships
+// Shift can have many tasks
+db.shift.hasMany(
+  db.shiftTask,
+  { as: "tasks", foreignKey: { name: 'shiftId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+db.shiftTask.belongsTo(
+  db.shift,
+  { as: "shift", foreignKey: { name: 'shiftId', allowNull: false }, onDelete: "CASCADE" }
+);
+
+// User can be assigned many shift tasks
+db.user.hasMany(
+  db.shiftTask,
+  { as: "assignedTasks", foreignKey: 'assignedTo' }
+);
+
+db.shiftTask.belongsTo(
+  db.user,
+  { as: "assignedUser", foreignKey: 'assignedTo' }
+);
+
+// User can complete many shift tasks
+db.user.hasMany(
+  db.shiftTask,
+  { as: "completedTasks", foreignKey: 'completedBy' }
+);
+
+db.shiftTask.belongsTo(
+  db.user,
+  { as: "completer", foreignKey: 'completedBy' }
 );
 
 
