@@ -5,9 +5,9 @@ import UserRoutes from "./user.routes.js";
 import TutorialRoutes from "./tutorial.routes.js";
 import LessonRoutes from "./lesson.routes.js";
 import NotificationRoutes from "./notification.routes.js";
-
 import TimeDiscrepancyRoutes from "./time_discrepancy.routes.js";
 import AvailabilityRoutes from "./availability.routes.js";
+import ShiftRoutes from "./shift.routes.js";
 
 const router = Router();
 
@@ -19,5 +19,6 @@ router.use("/tutorials", LessonRoutes);
 router.use("/notifications", NotificationRoutes);
 router.use("/time_discrepancies", TimeDiscrepancyRoutes);
 router.use("/availabilities", AvailabilityRoutes);
+router.use("/shifts", ShiftRoutes);
 
 export default router;
