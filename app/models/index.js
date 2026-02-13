@@ -10,6 +10,7 @@ import Tutorial from "./tutorial.model.js";
 import Lesson from "./lesson.model.js"; 
 import Tag from "./tag.model.js";
 import ShiftTag from "./shift_tag.model.js";
+import ShiftTrade from "./shift_trade.model.js";
 import UserDepartment from "./user_department.model.js";
 import ClockRecord from "./clock_record.model.js";
 import PositionQualification from "./position_qualification.model.js";
@@ -25,6 +26,7 @@ db.tutorial = Tutorial;
 db.lesson = Lesson;
 db.tag = Tag;
 db.shiftTag = ShiftTag;
+db.shiftTrade = ShiftTrade;
 db.userDepartment = UserDepartment;
 db.clockRecord = ClockRecord;
 db.positionQualification = PositionQualification;
@@ -99,6 +101,29 @@ db.clockRecord.belongsTo(db.user, {
   as: "user",
   foreignKey: { name: "userId", allowNull: false },
   onDelete: "CASCADE",
+});
+
+// foreign key for shift trades
+db.user.hasMany(db.shiftTrade, {
+  as: "requestedShiftTrades",
+  foreignKey: { name: "requesterId", allowNull: false },
+  onDelete: "CASCADE",
+});
+db.shiftTrade.belongsTo(db.user, {
+  as: "requester",
+  foreignKey: { name: "requesterId", allowNull: false },
+  onDelete: "CASCADE",
+});
+
+db.user.hasMany(db.shiftTrade, {
+  as: "receivedShiftTrades",
+  foreignKey: { name: "recipientId", allowNull: true },
+  onDelete: "SET NULL",
+});
+db.shiftTrade.belongsTo(db.user, {
+  as: "recipient",
+  foreignKey: { name: "recipientId", allowNull: true },
+  onDelete: "SET NULL",
 });
 
 export default db;
