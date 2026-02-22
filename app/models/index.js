@@ -4,6 +4,7 @@ import sequelize from "../config/sequelizeInstance.js";
 
 // Models
 import User from "./user.model.js";
+import Employee from "./employee.model.js";
 import Session from "./session.model.js";
 import Tutorial from "./tutorial.model.js";
 import Lesson from "./lesson.model.js";
@@ -28,6 +29,7 @@ db.Sequelize = Sequelize;
 db.sequelize = sequelize;
 
 db.user = User;
+db.employee = Employee;
 db.session = Session;
 db.tutorial = Tutorial;
 db.lesson = Lesson;
@@ -58,6 +60,19 @@ db.session.belongsTo(
   { as: "user" },
   { foreignKey: { allowNull: false }, onDelete: "CASCADE" }
 );
+
+// Employee relationships (mapped to users table)
+db.employee.hasMany(db.session, {
+  as: "sessions",
+  foreignKey: "userId",
+  constraints: false
+});
+
+db.session.belongsTo(db.employee, {
+  as: "employee",
+  foreignKey: "userId",
+  constraints: false
+});
 
 // foreign key for tutorials
 db.user.hasMany(
