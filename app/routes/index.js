@@ -13,6 +13,7 @@ import ShiftAcknowledgementRoutes from "./shiftAcknowledgement.routes.js";
 import ConflictAlertRoutes from "./conflictAlert.routes.js";
 import ShiftTaskRoutes from "./shiftTask.routes.js";
 import PositionRoutes from "./position.routes.js";
+import RoleRoutes from "./role.routes.js";
 
 const router = Router();
 
@@ -30,5 +31,6 @@ router.use("/shift-acknowledgements", ShiftAcknowledgementRoutes);
 router.use("/conflict-alerts", ConflictAlertRoutes);
 router.use("/shift-tasks", ShiftTaskRoutes);
 router.use("/positions", PositionRoutes);
+router.use("/roles", RoleRoutes);
 
 export default router;

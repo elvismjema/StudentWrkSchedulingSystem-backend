@@ -14,6 +14,7 @@ import Shift from "./shift.model.js";
 
 import Department from "./department.model.js";
 import Position from "./position.model.js";
+import Role from "./role.model.js";
 import ScheduleTemplate from "./schedule_template.model.js";
 
 import Availability from "./availability.model.js";
@@ -38,6 +39,7 @@ db.shift = Shift;
 
 db.department = Department;
 db.position = Position;
+db.role = Role;
 db.scheduleTemplate = ScheduleTemplate;
 
 db.availability = Availability;
@@ -188,7 +190,18 @@ db.department.hasMany(db.position, {
   as: "positions"
 });
 
+db.department.hasMany(db.role, {
+  foreignKey: "department_id",
+  as: "roles"
+});
+
 db.position.belongsTo(db.department, {
+  foreignKey: "department_id",
+  as: "department",
+  onDelete: "CASCADE"
+});
+
+db.role.belongsTo(db.department, {
   foreignKey: "department_id",
   as: "department",
   onDelete: "CASCADE"
