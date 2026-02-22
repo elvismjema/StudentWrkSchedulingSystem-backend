@@ -13,6 +13,7 @@ import ClockRecord from "./clock_record.model.js";
 import Shift from "./shift.model.js";
 
 import Department from "./department.model.js";
+import Position from "./position.model.js";
 import ScheduleTemplate from "./schedule_template.model.js";
 
 import Availability from "./availability.model.js";
@@ -36,6 +37,7 @@ db.clockRecord = ClockRecord;
 db.shift = Shift;
 
 db.department = Department;
+db.position = Position;
 db.scheduleTemplate = ScheduleTemplate;
 
 db.availability = Availability;
@@ -139,7 +141,7 @@ db.shift.belongsTo(db.department, {
   onDelete: "CASCADE"
 });
 
-db.shift.belongsTo(db.user, {
+db.shift.belongsTo(db.position, {
   foreignKey: "position_id",
   as: "position",
   onDelete: "CASCADE"
@@ -179,6 +181,22 @@ db.clockRecord.belongsTo(db.user, {
 db.department.hasMany(db.scheduleTemplate, {
   foreignKey: "department_id",
   as: "scheduleTemplates"
+});
+
+db.department.hasMany(db.position, {
+  foreignKey: "department_id",
+  as: "positions"
+});
+
+db.position.belongsTo(db.department, {
+  foreignKey: "department_id",
+  as: "department",
+  onDelete: "CASCADE"
+});
+
+db.position.hasMany(db.shift, {
+  foreignKey: "position_id",
+  as: "shifts"
 });
 
 // Schedule Template relationships
@@ -235,16 +253,16 @@ db.availability.belongsTo(
 //   { as: "department", foreignKey: 'departmentId' }
 // );
 
-// Position can have many schedule gap alerts (will be activated when position model is complete)
-// db.position.hasMany(
-//   db.scheduleGapAlert,
-//   { as: "scheduleGapAlerts", foreignKey: 'positionId' }
-// );
+// Position can have many schedule gap alerts
+db.position.hasMany(
+  db.scheduleGapAlert,
+  { as: "scheduleGapAlerts", foreignKey: "positionId" }
+);
 
-// db.scheduleGapAlert.belongsTo(
-//   db.position,
-//   { as: "position", foreignKey: 'positionId' }
-// );
+db.scheduleGapAlert.belongsTo(
+  db.position,
+  { as: "position", foreignKey: "positionId" }
+);
 
 // Shift Acknowledgement relationships
 // Shift can have many acknowledgements
