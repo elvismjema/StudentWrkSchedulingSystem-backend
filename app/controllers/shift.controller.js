@@ -45,7 +45,7 @@ export const createShift = async (req, res) => {
     const shiftWithAssociations = await Shift.findByPk(createdShift.shift_id, {
       include: [
         { model: db.department, as: 'department' },
-        { model: db.user, as: 'position' },
+        { model: db.position, as: 'position' },
         { model: db.scheduleTemplate, as: 'template' },
         { model: db.user, as: 'assignedUser' },
         { model: db.user, as: 'creator' }
@@ -75,7 +75,7 @@ export const listShifts = async (req, res) => {
       where,
       include: [
         { model: db.department, as: 'department' },
-        { model: db.user, as: 'position' },
+        { model: db.position, as: 'position' },
         { model: db.scheduleTemplate, as: 'template' },
         { model: db.user, as: 'assignedUser' },
         { model: db.user, as: 'creator' }
@@ -99,7 +99,7 @@ export const getShiftById = async (req, res) => {
     const shift = await Shift.findByPk(id, {
       include: [
         { model: db.department, as: 'department' },
-        { model: db.user, as: 'position' },
+        { model: db.position, as: 'position' },
         { model: db.scheduleTemplate, as: 'template' },
         { model: db.user, as: 'assignedUser' },
         { model: db.user, as: 'creator' }
@@ -133,7 +133,7 @@ export const updateShift = async (req, res) => {
       const updatedShift = await Shift.findByPk(id, {
         include: [
           { model: db.department, as: 'department' },
-          { model: db.user, as: 'position' },
+          { model: db.position, as: 'position' },
           { model: db.scheduleTemplate, as: 'template' },
           { model: db.user, as: 'assignedUser' },
           { model: db.user, as: 'creator' }
@@ -205,7 +205,7 @@ export const previewShifts = async (req, res) => {
       },
       include: [
         { model: db.department, as: 'department' },
-        { model: db.user, as: 'position' }
+        { model: db.position, as: 'position' }
       ]
     });
 

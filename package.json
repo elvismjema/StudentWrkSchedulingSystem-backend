@@ -16,6 +16,9 @@
   ],
   "author": "cs",
   "license": "ISC",
+  "engines": {
+    "node": ">=18 <23"
+  },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.0.0",

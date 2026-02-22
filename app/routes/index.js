@@ -12,6 +12,7 @@ import ScheduleGapAlertRoutes from "./scheduleGapAlert.routes.js";
 import ShiftAcknowledgementRoutes from "./shiftAcknowledgement.routes.js";
 import ConflictAlertRoutes from "./conflictAlert.routes.js";
 import ShiftTaskRoutes from "./shiftTask.routes.js";
+import PositionRoutes from "./position.routes.js";
 
 const router = Router();
 
@@ -28,5 +29,6 @@ router.use("/schedule-gap-alerts", ScheduleGapAlertRoutes);
 router.use("/shift-acknowledgements", ShiftAcknowledgementRoutes);
 router.use("/conflict-alerts", ConflictAlertRoutes);
 router.use("/shift-tasks", ShiftTaskRoutes);
+router.use("/positions", PositionRoutes);
 
 export default router;
