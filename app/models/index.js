@@ -23,6 +23,7 @@ import ScheduleGapAlert from "./scheduleGapAlert.model.js";
 import ShiftAcknowledgement from "./shiftAcknowledgement.model.js";
 import ConflictAlert from "./conflictAlert.model.js";
 import ShiftTask from "./shiftTask.model.js";
+import DepartmentHours from "./department_hours.model.js";
 
 
 const db = {};
@@ -49,6 +50,7 @@ db.scheduleGapAlert = ScheduleGapAlert;
 db.shiftAcknowledgement = ShiftAcknowledgement;
 db.conflictAlert = ConflictAlert;
 db.shiftTask = ShiftTask;
+db.departmentHours = DepartmentHours;
 
 
 // foreign key for session
@@ -208,6 +210,17 @@ db.department.hasMany(db.position, {
 db.department.hasMany(db.role, {
   foreignKey: "department_id",
   as: "roles"
+});
+
+db.department.hasMany(db.departmentHours, {
+  foreignKey: "department_id",
+  as: "departmentHours"
+});
+
+db.departmentHours.belongsTo(db.department, {
+  foreignKey: "department_id",
+  as: "department",
+  onDelete: "CASCADE"
 });
 
 db.position.belongsTo(db.department, {
