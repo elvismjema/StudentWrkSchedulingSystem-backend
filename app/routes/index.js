@@ -16,6 +16,7 @@ import ShiftTaskRoutes from "./shiftTask.routes.js";
 import PositionRoutes from "./position.routes.js";
 import DepartmentRoutes from "./department.routes.js";
 import RoleRoutes from "./role.routes.js";
+import DepartmentHoursRoutes from "./department_hours.routes.js";
 
 const router = Router();
 
@@ -36,5 +37,6 @@ router.use("/shift-tasks", ShiftTaskRoutes);
 router.use("/positions", PositionRoutes);
 router.use("/departments", DepartmentRoutes);
 router.use("/roles", RoleRoutes);
+router.use("/department-hours", DepartmentHoursRoutes);
 
 export default router;
