@@ -17,6 +17,7 @@ import PositionRoutes from "./position.routes.js";
 import DepartmentRoutes from "./department.routes.js";
 import RoleRoutes from "./role.routes.js";
 import DepartmentHoursRoutes from "./department_hours.routes.js";
+import QualificationRoutes from "./qualification.routes.js";
 
 const router = Router();
 
@@ -38,5 +39,6 @@ router.use("/positions", PositionRoutes);
 router.use("/departments", DepartmentRoutes);
 router.use("/roles", RoleRoutes);
 router.use("/department-hours", DepartmentHoursRoutes);
+router.use("/qualifications", QualificationRoutes);
 
 export default router;
