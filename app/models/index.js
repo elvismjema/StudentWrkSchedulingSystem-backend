@@ -24,6 +24,7 @@ import ShiftAcknowledgement from "./shiftAcknowledgement.model.js";
 import ConflictAlert from "./conflictAlert.model.js";
 import ShiftTask from "./shiftTask.model.js";
 import DepartmentHours from "./department_hours.model.js";
+import Qualification from "./qualification.model.js";
 
 
 const db = {};
@@ -51,6 +52,7 @@ db.shiftAcknowledgement = ShiftAcknowledgement;
 db.conflictAlert = ConflictAlert;
 db.shiftTask = ShiftTask;
 db.departmentHours = DepartmentHours;
+db.qualification = Qualification;
 
 
 // foreign key for session
