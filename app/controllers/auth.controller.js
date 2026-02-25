@@ -9,11 +9,9 @@ const User = db.user;
 const Session = db.session;
 const Op = db.Sequelize.Op;
 
-let googleUser = {};
-
 const google_id = process.env.CLIENT_ID;
-const STUDENT_EMAIL = "elvis.mjema@eagles.oc.edu";
-const MANAGER_EMAIL = "elvismjema04@gmail.com";
+const STUDENT_EMAIL = "elvis.mjema@eagles.oc.edu".toLowerCase();
+const MANAGER_EMAIL = "elvismjema04@gmail.com".toLowerCase();
 
 const determineRoleByEmail = (email) => {
   const normalizedEmail = (email || "").toLowerCase().trim();
@@ -37,17 +35,19 @@ exports.login = async (req, res) => {
   var googleToken = req.body.credential;
 
   const client = new OAuth2Client(google_id);
-  async function verify() {
+  let googleUser = {};
+
+  try {
     const ticket = await client.verifyIdToken({
       idToken: googleToken,
       audience: google_id,
     });
-    googleUser = ticket.getPayload();
+    googleUser = ticket.getPayload() || {};
     logger.debug(`Google authentication successful for email: ${googleUser.email}`);
-  }
-  await verify().catch((err) => {
+  } catch (err) {
     logger.error(`Google token verification failed: ${err.message}`);
-  });
+    return res.status(401).send({ message: "Invalid Google login token." });
+  }
 
   let email = googleUser.email;
   let firstName = googleUser.given_name || "User";
@@ -73,6 +73,11 @@ exports.login = async (req, res) => {
     email = data.email;
     firstName = data.given_name || "User";
     lastName = data.family_name || "";
+  }
+
+  if (!email) {
+    logger.warn("Login failed: Google account email is missing");
+    return res.status(400).send({ message: "Email is required for login." });
   }
 
   const assignedRole = determineRoleByEmail(email);
