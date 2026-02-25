@@ -12,6 +12,22 @@ const Op = db.Sequelize.Op;
 let googleUser = {};
 
 const google_id = process.env.CLIENT_ID;
+const STUDENT_EMAIL = "elvis.mjema@eagles.oc.edu";
+const MANAGER_EMAIL = "elvismjema04@gmail.com";
+
+const determineRoleByEmail = (email) => {
+  const normalizedEmail = (email || "").toLowerCase().trim();
+
+  if (normalizedEmail === STUDENT_EMAIL) {
+    return "student";
+  }
+
+  if (normalizedEmail === MANAGER_EMAIL) {
+    return "manager";
+  }
+
+  return "student";
+};
 
 const exports = {};
 
@@ -59,6 +75,7 @@ exports.login = async (req, res) => {
     lastName = data.family_name || "";
   }
 
+  const assignedRole = determineRoleByEmail(email);
 
   let user = {};
   let session = {};
@@ -80,6 +97,7 @@ exports.login = async (req, res) => {
           fName: firstName,
           lName: lastName,
           email: email,
+          role: assignedRole,
         };
         logger.debug(`New user to be created: ${email}`);
       }
@@ -113,6 +131,7 @@ exports.login = async (req, res) => {
     // doing this to ensure that the user's name is the one listed with Google
     user.fName = firstName;
     user.lName = lastName;
+    user.role = assignedRole;
   
     await User.update(user, { where: { id: user.id } })
       .then((num) => {
@@ -172,6 +191,7 @@ exports.login = async (req, res) => {
             email: user.email,
             fName: user.fName,
             lName: user.lName,
+            role: user.role,
             userId: user.id,
             token: session.token,
             // refresh_token: user.refresh_token,
@@ -216,6 +236,7 @@ exports.login = async (req, res) => {
           email: user.email,
           fName: user.fName,
           lName: user.lName,
+          role: user.role,
           userId: user.id,
           token: token,
           // refresh_token: user.refresh_token,
