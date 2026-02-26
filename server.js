@@ -1,21 +1,11 @@
 // Server entry point for Student Worker Scheduling System - Team 2
 import routes from "./app/routes/index.js";
-import express, { json, urlencoded } from "express"
+import express from "express";
 import cors from "cors";
 import morgan from "morgan";
 
 import db  from "./app/models/index.js";
 import logger from "./app/config/logger.js";
-
-db.sequelize.sync({ alter: true })
-  .then(() => {
-    logger.info('Database synchronized successfully');
-    logger.info('Models in sync: ' + Object.keys(db).filter(key => typeof db[key] === 'object' && db[key] !== null && 'tableName' in db[key]).join(', '));
-  })
-  .catch(err => {
-    logger.error('Error syncing database:', err);
-    process.exit(1); // Exit if we can't sync the database
-  });
 
 const app = express();
 
@@ -49,10 +39,32 @@ app.use("/workerscheduling-t2", routes);
 
 // set port, listen for requests
 const PORT = process.env.PORT || 3132;
+const shouldSyncSchema = process.env.DB_SYNC_ON_STARTUP === "true";
+
+const startServer = async () => {
+  try {
+    await db.sequelize.authenticate();
+    logger.info("Database connection established");
+    
+    // Require explicit opt-in for schema sync to prevent accidental production DDL changes.
+    if (shouldSyncSchema) {
+      await db.sequelize.sync();
+      logger.info("Database schema synchronized");
+    } else {
+      logger.info("Database schema sync skipped at startup");
+    }
+
+    app.listen(PORT, () => {
+      logger.info(`Server is running on port ${PORT}`);
+    });
+  } catch (err) {
+    logger.error(`Startup failed: ${err.message}`);
+    process.exit(1);
+  }
+};
+
 if (process.env.NODE_ENV !== "test") {
-  app.listen(PORT, () => {
-    logger.info(`Server is running on port ${PORT}`);
-  });
+  startServer();
 }
 
 // Export logger for use in other modules
