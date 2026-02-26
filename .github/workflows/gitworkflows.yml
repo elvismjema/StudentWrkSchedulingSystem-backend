@@ -1,12 +1,22 @@
 name: Backend Deploy
 
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches: [dev, main]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to deploy (branch or tag)"
+        required: true
+        default: "dev"
 
 jobs:
   deploy:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       contains(github.event.pull_request.labels.*.name, 'deploy-backend'))
     runs-on: ubuntu-latest
     env:
       DB_HOST: ${{ secrets.AWS_DB_HOST }}
@@ -20,7 +30,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: dev
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.event.pull_request.base.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
