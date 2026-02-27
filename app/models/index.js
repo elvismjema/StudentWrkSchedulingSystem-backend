@@ -25,6 +25,7 @@ import ConflictAlert from "./conflictAlert.model.js";
 import ShiftTask from "./shiftTask.model.js";
 import DepartmentHours from "./department_hours.model.js";
 import Qualification from "./qualification.model.js";
+import UserQualification from "./user_qualification.model.js";
 
 
 const db = {};
@@ -53,6 +54,7 @@ db.conflictAlert = ConflictAlert;
 db.shiftTask = ShiftTask;
 db.departmentHours = DepartmentHours;
 db.qualification = Qualification;
+db.userQualification = UserQualification;
 
 
 // foreign key for session
@@ -419,6 +421,27 @@ db.shiftTask.belongsTo(
   db.user,
   { as: "completer", foreignKey: 'completedBy' }
 );
+
+// User Qualification relationships
+db.user.hasMany(db.userQualification, {
+  as: "uploadedQualifications",
+  foreignKey: "user_id",
+});
+
+db.userQualification.belongsTo(db.user, {
+  as: "user",
+  foreignKey: "user_id",
+});
+
+db.qualification.hasMany(db.userQualification, {
+  as: "uploadedByUsers",
+  foreignKey: "qualification_id",
+});
+
+db.userQualification.belongsTo(db.qualification, {
+  as: "qualification",
+  foreignKey: "qualification_id",
+});
 
 
 export default db;
