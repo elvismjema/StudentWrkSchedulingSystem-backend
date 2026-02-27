@@ -139,4 +139,234 @@ exports.leaveDepar = async (req, res) => {
   }
 };
 
+// Admin: Get all users with their roles across all departments
+exports.getAllUsersWithRoles = async (req, res) => {
+  try {
+    const users = await db.user.findAll({
+      include: [
+        {
+          model: UserDepartment,
+          as: "userDepartments",
+          where: { is_active: true },
+          required: false,
+          include: [
+            {
+              model: Department,
+              as: "department",
+              attributes: ["department_id", "department_name"],
+            },
+            {
+              model: db.role,
+              as: "role",
+              attributes: ["role_id", "role_name", "permission_level"],
+            },
+            {
+              model: db.position,
+              as: "position",
+              attributes: ["position_id", "position_name"],
+            },
+          ],
+        },
+      ],
+      order: [["lName", "ASC"], ["fName", "ASC"]],
+    });
+
+    res.send(users);
+  } catch (err) {
+    res.status(500).send({
+      message:
+        err.message || "Some error occurred while retrieving users with roles.",
+    });
+  }
+};
+
+// Admin: Assign or update user role in a department
+exports.assignUserRole = async (req, res) => {
+  const { user_id, department_id, role_id, position_id } = req.body;
+
+  if (!user_id || !department_id || !role_id) {
+    return res.status(400).send({
+      message: "user_id, department_id, and role_id are required.",
+    });
+  }
+
+  try {
+    // Check if the department exists
+    const department = await Department.findByPk(department_id);
+    if (!department) {
+      return res.status(404).send({
+        message: `Department with id=${department_id} not found.`,
+      });
+    }
+
+    // Check if the role exists
+    const role = await db.role.findByPk(role_id);
+    if (!role) {
+      return res.status(404).send({
+        message: `Role with id=${role_id} not found.`,
+      });
+    }
+
+    // Check if the user exists
+    const user = await db.user.findByPk(user_id);
+    if (!user) {
+      return res.status(404).send({
+        message: `User with id=${user_id} not found.`,
+      });
+    }
+
+    // Check if user already has an active membership in this department
+    let membership = await UserDepartment.findOne({
+      where: {
+        user_id: user_id,
+        department_id: department_id,
+        is_active: true,
+      },
+    });
+
+    if (membership) {
+      // Update existing membership
+      membership.role_id = role_id;
+      membership.position_id = position_id || membership.position_id;
+      await membership.save();
+
+      const updatedMembership = await UserDepartment.findByPk(membership.ud_id, {
+        include: [
+          {
+            model: Department,
+            as: "department",
+            attributes: ["department_id", "department_name"],
+          },
+          {
+            model: db.role,
+            as: "role",
+            attributes: ["role_id", "role_name", "permission_level"],
+          },
+          {
+            model: db.position,
+            as: "position",
+            attributes: ["position_id", "position_name"],
+          },
+        ],
+      });
+
+      res.send({
+        message: "User role updated successfully.",
+        data: updatedMembership,
+      });
+    } else {
+      // Create new membership
+      const newMembership = await UserDepartment.create({
+        user_id,
+        department_id,
+        position_id: position_id || null,
+        role_id,
+        is_active: true,
+        assigned_at: new Date(),
+      });
+
+      const createdMembership = await UserDepartment.findByPk(newMembership.ud_id, {
+        include: [
+          {
+            model: Department,
+            as: "department",
+            attributes: ["department_id", "department_name"],
+          },
+          {
+            model: db.role,
+            as: "role",
+            attributes: ["role_id", "role_name", "permission_level"],
+          },
+          {
+            model: db.position,
+            as: "position",
+            attributes: ["position_id", "position_name"],
+          },
+        ],
+      });
+
+      res.status(201).send({
+        message: "User role assigned successfully.",
+        data: createdMembership,
+      });
+    }
+  } catch (err) {
+    res.status(500).send({
+      message: err.message || "Some error occurred while assigning user role.",
+    });
+  }
+};
+
+// Get current user's active roles across all departments
+exports.getUserRoles = async (req, res) => {
+  const userId = req.params.userId;
+
+  if (!userId) {
+    return res.status(400).send({
+      message: "userId parameter is required.",
+    });
+  }
+
+  try {
+    const roles = await UserDepartment.findAll({
+      where: {
+        user_id: userId,
+        is_active: true,
+      },
+      include: [
+        {
+          model: Department,
+          as: "department",
+          attributes: ["department_id", "department_name", "description"],
+        },
+        {
+          model: db.role,
+          as: "role",
+          attributes: ["role_id", "role_name", "permission_level", "description"],
+        },
+        {
+          model: db.position,
+          as: "position",
+          attributes: ["position_id", "position_name"],
+        },
+      ],
+      order: [[{ model: Department, as: "department" }, "department_name", "ASC"]],
+    });
+
+    res.send(roles);
+  } catch (err) {
+    res.status(500).send({
+      message: err.message || "Some error occurred while retrieving user roles.",
+    });
+  }
+};
+
+// Admin: Remove user role from a department
+exports.removeUserRole = async (req, res) => {
+  const udId = req.params.id;
+
+  try {
+    const membership = await UserDepartment.findByPk(udId);
+
+    if (!membership) {
+      return res.status(404).send({
+        message: `User-Department membership with id=${udId} not found.`,
+      });
+    }
+
+    membership.is_active = false;
+    membership.deactivated_at = new Date();
+    await membership.save();
+
+    res.send({
+      message: "User role removed successfully.",
+      data: membership,
+    });
+  } catch (err) {
+    res.status(500).send({
+      message: err.message || "Some error occurred while removing user role.",
+    });
+  }
+};
+
 export default exports;

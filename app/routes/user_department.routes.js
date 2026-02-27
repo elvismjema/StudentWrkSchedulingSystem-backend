@@ -16,4 +16,16 @@ router.get("/user/:userId", [authenticate], userDepartment.listUserDepartments);
 // Leave a department (deactivate membership)
 router.put("/leave/:id", [authenticate], userDepartment.leaveDepar);
 
+// Admin: Get all users with their roles
+router.get("/admin/users-with-roles", [authenticate], userDepartment.getAllUsersWithRoles);
+
+// Admin: Assign or update user role
+router.post("/admin/assign-role", [authenticate], userDepartment.assignUserRole);
+
+// Admin: Remove user role from department
+router.delete("/admin/remove-role/:id", [authenticate], userDepartment.removeUserRole);
+
+// Get user's active roles across all departments
+router.get("/roles/:userId", [authenticate], userDepartment.getUserRoles);
+
 export default router;
