@@ -3,6 +3,86 @@ import { Op } from "sequelize";
 
 const Shift = db.shift;
 
+// Helper function to validate buffer time between shifts
+export const validateBufferTime = async (departmentId, shiftDate, startTime, endTime, assignedUserId, excludeShiftId = null) => {
+  // Get department buffer time setting
+  const department = await db.department.findByPk(departmentId);
+  if (!department || !department.buffer_time_minutes || department.buffer_time_minutes === 0) {
+    return { valid: true }; // No buffer time configured
+  }
+
+  const bufferMinutes = department.buffer_time_minutes;
+
+  // If no user is assigned or no date, skip validation
+  if (!assignedUserId || !shiftDate) {
+    return { valid: true };
+  }
+
+  // Find all shifts for this user on the same date
+  const whereClause = {
+    assigned_user_id: assignedUserId,
+    shift_date: shiftDate
+  };
+
+  // Exclude current shift if updating
+  if (excludeShiftId) {
+    whereClause.shift_id = { [Op.ne]: excludeShiftId };
+  }
+
+  const existingShifts = await Shift.findAll({
+    where: whereClause,
+    order: [['start_time', 'ASC']]
+  });
+
+  // Convert time strings to minutes for easier comparison
+  const timeToMinutes = (timeStr) => {
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    return hours * 60 + minutes;
+  };
+
+  const newStartMinutes = timeToMinutes(startTime);
+  const newEndMinutes = timeToMinutes(endTime);
+
+  // Check buffer time with each existing shift
+  for (const existingShift of existingShifts) {
+    const existingStartMinutes = timeToMinutes(existingShift.start_time);
+    const existingEndMinutes = timeToMinutes(existingShift.end_time);
+
+    // Check if new shift ends too close to when existing shift starts
+    const timeBetweenShifts1 = existingStartMinutes - newEndMinutes;
+    // Check if existing shift ends too close to when new shift starts
+    const timeBetweenShifts2 = newStartMinutes - existingEndMinutes;
+
+    if (timeBetweenShifts1 >= 0 && timeBetweenShifts1 < bufferMinutes) {
+      return {
+        valid: false,
+        message: `Buffer time violation: Only ${timeBetweenShifts1} minutes between new shift end (${endTime}) and existing shift start (${existingShift.start_time}). Required buffer: ${bufferMinutes} minutes.`
+      };
+    }
+
+    if (timeBetweenShifts2 >= 0 && timeBetweenShifts2 < bufferMinutes) {
+      return {
+        valid: false,
+        message: `Buffer time violation: Only ${timeBetweenShifts2} minutes between existing shift end (${existingShift.end_time}) and new shift start (${startTime}). Required buffer: ${bufferMinutes} minutes.`
+      };
+    }
+
+    // Check for overlap
+    if (
+      (newStartMinutes >= existingStartMinutes && newStartMinutes < existingEndMinutes) ||
+      (newEndMinutes > existingStartMinutes && newEndMinutes <= existingEndMinutes) ||
+      (newStartMinutes <= existingStartMinutes && newEndMinutes >= existingEndMinutes)
+    ) {
+      return {
+        valid: false,
+        message: `Shift overlap detected: New shift (${startTime}-${endTime}) overlaps with existing shift (${existingShift.start_time}-${existingShift.end_time}).`
+      };
+    }
+  }
+
+  return { valid: true };
+};
+
 // Create and Save a new Shift
 export const createShift = async (req, res) => {
   try {
@@ -16,6 +96,25 @@ export const createShift = async (req, res) => {
     // If shift_date is provided, ignore day_of_week
     if (req.body.shift_date) {
       req.body.day_of_week = null;
+    }
+
+    // Validate buffer time if shift is assigned and has a date
+    if (req.body.assigned_user_id && req.body.shift_date) {
+      const bufferValidation = await validateBufferTime(
+        req.body.department_id,
+        req.body.shift_date,
+        req.body.start_time,
+        req.body.end_time,
+        req.body.assigned_user_id
+      );
+
+      if (!bufferValidation.valid) {
+        return res.status(409).send({
+          success: false,
+          message: bufferValidation.message,
+          conflictType: 'buffer_time_violation'
+        });
+      }
     }
 
     // Create a Shift
@@ -125,6 +224,41 @@ export const updateShift = async (req, res) => {
   const id = req.params.id;
 
   try {
+    // Get the existing shift first
+    const existingShift = await Shift.findByPk(id);
+    
+    if (!existingShift) {
+      return res.status(404).send({
+        message: `Shift with id=${id} was not found.`
+      });
+    }
+
+    // Validate buffer time if updating assigned user, date, or times
+    const departmentId = req.body.department_id || existingShift.department_id;
+    const assignedUserId = req.body.assigned_user_id !== undefined ? req.body.assigned_user_id : existingShift.assigned_user_id;
+    const shiftDate = req.body.shift_date || existingShift.shift_date;
+    const startTime = req.body.start_time || existingShift.start_time;
+    const endTime = req.body.end_time || existingShift.end_time;
+
+    if (assignedUserId && shiftDate) {
+      const bufferValidation = await validateBufferTime(
+        departmentId,
+        shiftDate,
+        startTime,
+        endTime,
+        assignedUserId,
+        id // Exclude current shift from validation
+      );
+
+      if (!bufferValidation.valid) {
+        return res.status(409).send({
+          success: false,
+          message: bufferValidation.message,
+          conflictType: 'buffer_time_violation'
+        });
+      }
+    }
+
     const num = await Shift.update(req.body, {
       where: { shift_id: id }
     });
