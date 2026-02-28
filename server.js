@@ -6,6 +6,7 @@ import morgan from "morgan";
 
 import db  from "./app/models/index.js";
 import logger from "./app/config/logger.js";
+import { runSeeds } from "./app/config/seed.js";
 
 const app = express();
 
@@ -39,20 +40,17 @@ app.use("/workerscheduling-t2", routes);
 
 // set port, listen for requests
 const PORT = process.env.PORT || 3132;
-const shouldSyncSchema = process.env.DB_SYNC_ON_STARTUP === "true";
-
 const startServer = async () => {
   try {
     await db.sequelize.authenticate();
     logger.info("Database connection established");
     
-    // Require explicit opt-in for schema sync to prevent accidental production DDL changes.
-    if (shouldSyncSchema) {
-      await db.sequelize.sync();
-      logger.info("Database schema synchronized");
-    } else {
-      logger.info("Database schema sync skipped at startup");
-    }
+    // Sync schema to ensure all tables exist (safe: only creates missing tables)
+    await db.sequelize.sync();
+    logger.info("Database schema synchronized");
+
+    // Seed essential data (uses findOrCreate, safe to run every startup)
+    await runSeeds();
 
     app.listen(PORT, () => {
       logger.info(`Server is running on port ${PORT}`);
