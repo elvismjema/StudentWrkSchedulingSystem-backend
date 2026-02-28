@@ -1,5 +1,6 @@
 import db  from "../models/index.js";
 import { randomBytes } from "crypto";
+import https from "https";
 import logger from "../config/logger.js";
 
 const User = db.user;
@@ -31,18 +32,57 @@ const createSessionToken = () => {
   return randomBytes(48).toString("hex");
 };
 
+const httpsRequestJson = (url, { method = "GET", headers = {}, body } = {}) =>
+  new Promise((resolve, reject) => {
+    const req = https.request(url, { method, headers }, (res) => {
+      let raw = "";
+
+      res.on("data", (chunk) => {
+        raw += chunk;
+      });
+
+      res.on("end", () => {
+        let payload = {};
+
+        if (raw) {
+          try {
+            payload = JSON.parse(raw);
+          } catch (err) {
+            reject(new Error(`Invalid JSON response from Google (status ${res.statusCode})`));
+            return;
+          }
+        }
+
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(payload);
+          return;
+        }
+
+        const message =
+          payload.error_description ||
+          payload.error ||
+          payload.message ||
+          `Google request failed with status ${res.statusCode}`;
+        reject(new Error(message));
+      });
+    });
+
+    req.on("error", (err) => reject(err));
+
+    if (body) {
+      req.write(body);
+    }
+
+    req.end();
+  });
+
 const verifyGoogleIdToken = async (idToken) => {
-  const response = await fetch(
+  const payload = await httpsRequestJson(
     `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(
       idToken,
     )}`,
   );
-
-  if (!response.ok) {
-    throw new Error(`Google token verification failed with status ${response.status}`);
-  }
-
-  const payload = await response.json();
+  
   if (payload.aud !== google_id) {
     throw new Error("Google token audience mismatch");
   }
@@ -51,17 +91,11 @@ const verifyGoogleIdToken = async (idToken) => {
 };
 
 const fetchGoogleUserInfo = async (accessToken) => {
-  const response = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+  return httpsRequestJson("https://www.googleapis.com/oauth2/v2/userinfo", {
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
   });
-
-  if (!response.ok) {
-    throw new Error(`Google userinfo request failed with status ${response.status}`);
-  }
-
-  return response.json();
 };
 
 const exchangeGoogleCodeForTokens = async (code) => {
@@ -73,19 +107,13 @@ const exchangeGoogleCodeForTokens = async (code) => {
     grant_type: "authorization_code",
   });
 
-  const response = await fetch("https://oauth2.googleapis.com/token", {
+  return httpsRequestJson("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
     },
-    body: payload,
+    body: payload.toString(),
   });
-
-  if (!response.ok) {
-    throw new Error(`Google code exchange failed with status ${response.status}`);
-  }
-
-  return response.json();
 };
 
 exports.login = async (req, res) => {
