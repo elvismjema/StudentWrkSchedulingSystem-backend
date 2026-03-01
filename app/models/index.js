@@ -25,6 +25,7 @@ import ConflictAlert from "./conflictAlert.model.js";
 import ShiftTask from "./shiftTask.model.js";
 import DepartmentHours from "./department_hours.model.js";
 import Qualification from "./qualification.model.js";
+import UserDepartment from "./user_department.model.js";
 
 
 const db = {};
@@ -53,6 +54,7 @@ db.conflictAlert = ConflictAlert;
 db.shiftTask = ShiftTask;
 db.departmentHours = DepartmentHours;
 db.qualification = Qualification;
+db.userDepartment = UserDepartment;
 
 
 // foreign key for session
@@ -420,5 +422,50 @@ db.shiftTask.belongsTo(
   { as: "completer", foreignKey: 'completedBy' }
 );
 
+
+// UserDepartment relationships
+db.user.hasMany(db.userDepartment, {
+  foreignKey: "user_id",
+  as: "userDepartments",
+});
+
+db.userDepartment.belongsTo(db.user, {
+  foreignKey: "user_id",
+  as: "user",
+  onDelete: "CASCADE",
+});
+
+db.department.hasMany(db.userDepartment, {
+  foreignKey: "department_id",
+  as: "userDepartments",
+});
+
+db.userDepartment.belongsTo(db.department, {
+  foreignKey: "department_id",
+  as: "department",
+  onDelete: "CASCADE",
+});
+
+db.position.hasMany(db.userDepartment, {
+  foreignKey: "position_id",
+  as: "userDepartments",
+});
+
+db.userDepartment.belongsTo(db.position, {
+  foreignKey: "position_id",
+  as: "position",
+  onDelete: "SET NULL",
+});
+
+db.role.hasMany(db.userDepartment, {
+  foreignKey: "role_id",
+  as: "userDepartments",
+});
+
+db.userDepartment.belongsTo(db.role, {
+  foreignKey: "role_id",
+  as: "role",
+  onDelete: "SET NULL",
+});
 
 export default db;

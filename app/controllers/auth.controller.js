@@ -1,8 +1,5 @@
 import db  from "../models/index.js";
-import authconfig  from "../config/auth.config.js";
-import { OAuth2Client } from "google-auth-library";
-import  { google } from "googleapis";
-import jwt from "jsonwebtoken";
+import { randomBytes } from "crypto";
 import logger from "../config/logger.js";
 
 const User = db.user;
@@ -33,20 +30,77 @@ const determineRoleByEmail = (email) => {
 
 const exports = {};
 
+const createSessionToken = () => {
+  // Opaque session token; session validity is enforced via DB session lookup.
+  return randomBytes(48).toString("hex");
+};
+
+const verifyGoogleIdToken = async (idToken) => {
+  const response = await fetch(
+    `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(
+      idToken,
+    )}`,
+  );
+
+  if (!response.ok) {
+    throw new Error(`Google token verification failed with status ${response.status}`);
+  }
+
+  const payload = await response.json();
+  if (payload.aud !== google_id) {
+    throw new Error("Google token audience mismatch");
+  }
+
+  return payload;
+};
+
+const fetchGoogleUserInfo = async (accessToken) => {
+  const response = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Google userinfo request failed with status ${response.status}`);
+  }
+
+  return response.json();
+};
+
+const exchangeGoogleCodeForTokens = async (code) => {
+  const payload = new URLSearchParams({
+    code,
+    client_id: process.env.CLIENT_ID || "",
+    client_secret: process.env.CLIENT_SECRET || "",
+    redirect_uri: "postmessage",
+    grant_type: "authorization_code",
+  });
+
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: payload,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Google code exchange failed with status ${response.status}`);
+  }
+
+  return response.json();
+};
+
 exports.login = async (req, res) => {
   logger.info('Login attempt initiated');
 
   var googleToken = req.body.credential;
 
-  const client = new OAuth2Client(google_id);
   let googleUser = {};
 
   try {
-    const ticket = await client.verifyIdToken({
-      idToken: googleToken,
-      audience: google_id,
-    });
-    googleUser = ticket.getPayload() || {};
+    googleUser = await verifyGoogleIdToken(googleToken);
     logger.debug(`Google authentication successful for email: ${googleUser.email}`);
   } catch (err) {
     logger.error(`Google token verification failed: ${err.message}`);
@@ -65,18 +119,17 @@ exports.login = async (req, res) => {
       lastName === undefined) &&
     req.body.accessToken !== undefined
   ) {
-    logger.debug('Fetching additional user info from Google API');
-    let oauth2Client = new OAuth2Client(google_id); // create new auth client
-    oauth2Client.setCredentials({ access_token: req.body.accessToken }); // use the new auth client with the access_token
-    let oauth2 = google.oauth2({
-      auth: oauth2Client,
-      version: "v2",
-    });
-    let { data } = await oauth2.userinfo.get(); // get user info
-    logger.debug(`Retrieved user info from Google: ${data.email}`);
-    email = data.email;
-    firstName = data.given_name || "User";
-    lastName = data.family_name || "";
+    try {
+      logger.debug('Fetching additional user info from Google API');
+      const data = await fetchGoogleUserInfo(req.body.accessToken);
+      logger.debug(`Retrieved user info from Google: ${data.email}`);
+      email = data.email;
+      firstName = data.given_name || "User";
+      lastName = data.family_name || "";
+    } catch (err) {
+      logger.error(`Error fetching Google user info: ${err.message}`);
+      return res.status(401).send({ message: "Could not retrieve Google user profile." });
+    }
   }
 
   if (!email) {
@@ -106,7 +159,6 @@ exports.login = async (req, res) => {
           fName: firstName,
           lName: lastName,
           email: email,
-          role: assignedRole,
         };
         logger.debug(`New user to be created: ${email}`);
       }
@@ -140,7 +192,6 @@ exports.login = async (req, res) => {
     // doing this to ensure that the user's name is the one listed with Google
     user.fName = firstName;
     user.lName = lastName;
-    user.role = assignedRole;
   
     await User.update(user, { where: { id: user.id } })
       .then((num) => {
@@ -200,7 +251,7 @@ exports.login = async (req, res) => {
             email: user.email,
             fName: user.fName,
             lName: user.lName,
-            role: user.role,
+            role: assignedRole,
             userId: user.id,
             token: session.token,
             // refresh_token: user.refresh_token,
@@ -225,9 +276,7 @@ exports.login = async (req, res) => {
   if (session.id === undefined) {
     // create a new Session with an expiration date and save to database
     logger.info(`Creating new session for ${email}`);
-    let token = jwt.sign({ id: email }, authconfig.secret, {
-      expiresIn: 86400,
-    });
+    let token = createSessionToken();
     let tempExpirationDate = new Date();
     tempExpirationDate.setDate(tempExpirationDate.getDate() + 1);
     const newSession = {
@@ -245,7 +294,7 @@ exports.login = async (req, res) => {
           email: user.email,
           fName: user.fName,
           lName: user.lName,
-          role: user.role,
+          role: assignedRole,
           userId: user.id,
           token: token,
           // refresh_token: user.refresh_token,
@@ -263,17 +312,15 @@ exports.login = async (req, res) => {
 
 exports.authorize = async (req, res) => {
   logger.info(`Authorization request for user: ${req.params.id}`);
-  
-  const oauth2Client = new google.auth.OAuth2(
-    process.env.CLIENT_ID,
-    process.env.CLIENT_SECRET,
-    "postmessage"
-  );
 
-  logger.debug('Exchanging authorization code for tokens');
-  // Get access and refresh tokens (if access_type is offline)
-  let { tokens } = await oauth2Client.getToken(req.body.code);
-  oauth2Client.setCredentials(tokens);
+  let tokens;
+  try {
+    logger.debug('Exchanging authorization code for tokens');
+    tokens = await exchangeGoogleCodeForTokens(req.body.code);
+  } catch (err) {
+    logger.error(`Authorization code exchange failed: ${err.message}`);
+    return res.status(401).send({ message: "Failed to authorize with Google." });
+  }
 
   let user = {};
   logger.debug(`Finding user with id: ${req.params.id}`);
@@ -306,7 +353,7 @@ exports.authorize = async (req, res) => {
     return; // User not found, response already sent
   }
   
-  user.refresh_token = tokens.refresh_token;
+  user.refresh_token = tokens.refresh_token || user.refresh_token;
   let tempExpirationDate = new Date();
   tempExpirationDate.setDate(tempExpirationDate.getDate() + 100);
   user.expiration_date = tempExpirationDate;
