@@ -8,7 +8,11 @@ const Op = db.Sequelize.Op;
 
 const google_id = process.env.CLIENT_ID;
 const STUDENT_EMAIL = "elvis.mjema@eagles.oc.edu".toLowerCase();
-const MANAGER_EMAIL = "elvismjema04@gmail.com".toLowerCase();
+const MANAGER_EMAILS = new Set([
+  "elvismjema04@gmail.com",
+  "byibonheur@gmail.com",
+  "muhirejonathan123@gmail.com",
+].map((email) => email.toLowerCase()));
 
 const determineRoleByEmail = (email) => {
   const normalizedEmail = (email || "").toLowerCase().trim();
@@ -17,7 +21,7 @@ const determineRoleByEmail = (email) => {
     return "student";
   }
 
-  if (normalizedEmail === MANAGER_EMAIL) {
+  if (MANAGER_EMAILS.has(normalizedEmail)) {
     return "manager";
   }
 
