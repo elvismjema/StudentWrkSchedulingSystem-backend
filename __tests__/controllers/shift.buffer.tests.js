@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
-import { validateBufferTime } from '../app/controllers/shift.controller.js';
-import db from '../app/models/index.js';
+import { validateBufferTime } from '../../app/controllers/shift.controller.js';
+import db from '../../app/models/index.js';
 
 describe('Buffer Time Validation', () => {
   let testDepartment;

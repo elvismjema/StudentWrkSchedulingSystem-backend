@@ -4,7 +4,8 @@ import {
   listQualifications,
   getQualificationById,
   updateQualification,
-  deleteQualification
+  deleteQualification,
+  uploadQualificationDocument
 } from "../controllers/qualification.controller.js";
 import { verifyToken } from "../middleware/authJwt.js";
 
@@ -15,5 +16,6 @@ router.get("/", [verifyToken], listQualifications);
 router.get("/:id", [verifyToken], getQualificationById);
 router.put("/:id", [verifyToken], updateQualification);
 router.delete("/:id", [verifyToken], deleteQualification);
+router.post("/upload", [verifyToken], uploadQualificationDocument);
 
 export default router;
