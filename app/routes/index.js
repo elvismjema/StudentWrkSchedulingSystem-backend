@@ -8,6 +8,7 @@ import NotificationRoutes from "./notification.routes.js";
 import TimeDiscrepancyRoutes from "./time_discrepancy.routes.js";
 import AvailabilityRoutes from "./availability.routes.js";
 import ShiftRoutes from "./shift.routes.js";
+import QualificationRoutes from "./qualification.routes.js";
 
 const router = Router();
 
@@ -20,5 +21,6 @@ router.use("/notifications", NotificationRoutes);
 router.use("/time_discrepancies", TimeDiscrepancyRoutes);
 router.use("/availabilities", AvailabilityRoutes);
 router.use("/shifts", ShiftRoutes);
+router.use("/qualifications", QualificationRoutes);
 
 export default router;

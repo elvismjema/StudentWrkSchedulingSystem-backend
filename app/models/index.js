@@ -11,11 +11,13 @@ import Notification from "./notification.model.js";
 import TimeDiscrepancy from "./time_discrepancy.model.js";
 import ClockRecord from "./clock_record.model.js";
 import Shift from "./shift.model.js";
-
 import Department from "./department.model.js";
 import ScheduleTemplate from "./schedule_template.model.js";
-
 import Availability from "./availability.model.js";
+import Position from "./position.model.js";
+import Qualification from "./qualification.model.js";
+import UserQualification from "./userQualification.model.js";
+import PositionQualification from "./positionQualification.model.js";
 
 
 const db = {};
@@ -30,11 +32,13 @@ db.notification = Notification;
 db.timeDiscrepancy = TimeDiscrepancy;
 db.clockRecord = ClockRecord;
 db.shift = Shift;
-
 db.department = Department;
 db.scheduleTemplate = ScheduleTemplate;
-
 db.availability = Availability;
+db.position = Position;
+db.qualification = Qualification;
+db.userQualification = UserQualification;
+db.positionQualification = PositionQualification;
 
 
 // foreign key for session
@@ -131,7 +135,7 @@ db.shift.belongsTo(db.department, {
   onDelete: "CASCADE"
 });
 
-db.shift.belongsTo(db.user, {
+db.shift.belongsTo(db.position, {
   foreignKey: "position_id",
   as: "position",
   onDelete: "CASCADE"
@@ -215,6 +219,73 @@ db.availability.belongsTo(
   db.user,
   { as: "approver", foreignKey: 'approvedBy' }
 );
+
+// Position relationships
+db.department.hasMany(db.position, {
+  foreignKey: "department_id",
+  as: "positions"
+});
+
+db.position.belongsTo(db.department, {
+  foreignKey: "department_id",
+  as: "department"
+});
+
+// Qualification relationships
+db.qualification.belongsToMany(db.user, {
+  through: db.userQualification,
+  foreignKey: "qualification_id",
+  otherKey: "user_id",
+  as: "users"
+});
+
+db.user.belongsToMany(db.qualification, {
+  through: db.userQualification,
+  foreignKey: "user_id",
+  otherKey: "qualification_id",
+  as: "qualifications"
+});
+
+db.qualification.belongsToMany(db.position, {
+  through: db.positionQualification,
+  foreignKey: "qualification_id",
+  otherKey: "position_id",
+  as: "positions"
+});
+
+db.position.belongsToMany(db.qualification, {
+  through: db.positionQualification,
+  foreignKey: "position_id",
+  otherKey: "qualification_id",
+  as: "requiredQualifications"
+});
+
+// UserQualification relationships
+db.userQualification.belongsTo(db.user, {
+  foreignKey: "user_id",
+  as: "user"
+});
+
+db.userQualification.belongsTo(db.qualification, {
+  foreignKey: "qualification_id",
+  as: "qualification"
+});
+
+db.userQualification.belongsTo(db.user, {
+  foreignKey: "approved_by_user_id",
+  as: "approver"
+});
+
+// PositionQualification relationships
+db.positionQualification.belongsTo(db.position, {
+  foreignKey: "position_id",
+  as: "position"
+});
+
+db.positionQualification.belongsTo(db.qualification, {
+  foreignKey: "qualification_id",
+  as: "qualification"
+});
 
 
 export default db;

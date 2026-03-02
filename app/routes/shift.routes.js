@@ -1,25 +1,25 @@
 import express from "express";
 import * as shiftController from "../controllers/shift.controller.js";
-import { verifyToken } from "../middleware/authJwt.js";
+import authenticate from "../authorization/authorization.js";
 
 const router = express.Router();
 
 // Create a new Shift
-router.post("/", [verifyToken], shiftController.createShift);
+router.post("/", [authenticate], shiftController.createShift);
 
 // Retrieve all Shifts with optional filters
-router.get("/", [verifyToken], shiftController.listShifts);
+router.get("/", [authenticate], shiftController.listShifts);
 
 // Retrieve a single Shift with id
-router.get("/:id", [verifyToken], shiftController.getShiftById);
+router.get("/:id", [authenticate], shiftController.getShiftById);
 
-// Update a Shift with id
-router.put("/:id", [verifyToken], shiftController.updateShift);
+// Update a Shift with id (includes qualification validation for user assignment)
+router.put("/:id", [authenticate], shiftController.updateShift);
 
 // Delete a Shift with id
-router.delete("/:id", [verifyToken], shiftController.deleteShift);
+router.delete("/:id", [authenticate], shiftController.deleteShift);
 
 // Preview shifts based on template
-router.post("/preview", [verifyToken], shiftController.previewShifts);
+router.post("/preview", [authenticate], shiftController.previewShifts);
 
 export default router;
