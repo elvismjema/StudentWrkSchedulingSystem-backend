@@ -20,6 +20,15 @@ const User = SequelizeInstance.define("user", {
     type: Sequelize.STRING,
     allowNull: false,
   },
+  is_active: {
+    type: Sequelize.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+  },
+  deactivated_at: {
+    type: Sequelize.DATE,
+    allowNull: true,
+  },
   // refresh_token: {
   //   type: Sequelize.STRING(512),
   //   allowNull: true

@@ -142,7 +142,13 @@ exports.leaveDepar = async (req, res) => {
 // Admin: Get all users with their roles across all departments
 exports.getAllUsersWithRoles = async (req, res) => {
   try {
+    const activeOnly = String(req.query.activeOnly || "").toLowerCase() === "true";
+    const userWhere = activeOnly
+      ? { is_active: true }
+      : undefined;
+
     const users = await db.user.findAll({
+      where: userWhere,
       include: [
         {
           model: UserDepartment,
