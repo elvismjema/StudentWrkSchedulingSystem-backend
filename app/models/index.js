@@ -12,6 +12,7 @@ import Notification from "./notification.model.js";
 import TimeDiscrepancy from "./time_discrepancy.model.js";
 import ClockRecord from "./clock_record.model.js";
 import Shift from "./shift.model.js";
+import ShiftAudit from "./shift_audit.model.js";
 
 import Department from "./department.model.js";
 import Position from "./position.model.js";
@@ -42,6 +43,7 @@ db.notification = Notification;
 db.timeDiscrepancy = TimeDiscrepancy;
 db.clockRecord = ClockRecord;
 db.shift = Shift;
+db.shiftAudit = ShiftAudit;
 
 db.department = Department;
 db.position = Position;
@@ -195,10 +197,48 @@ db.shift.hasMany(db.timeDiscrepancy, {
   as: "timeDiscrepancies"
 });
 
+db.shift.hasMany(db.shiftAudit, {
+  foreignKey: "shift_id",
+  as: "auditEntries",
+});
+
+db.shiftAudit.belongsTo(db.shift, {
+  foreignKey: "shift_id",
+  as: "shift",
+  onDelete: "CASCADE",
+});
+
+db.user.hasMany(db.shiftAudit, {
+  foreignKey: "actor_user_id",
+  as: "shiftAudits",
+});
+
+db.shiftAudit.belongsTo(db.user, {
+  foreignKey: "actor_user_id",
+  as: "actor",
+  onDelete: "CASCADE",
+});
+
 db.clockRecord.belongsTo(db.user, {
   foreignKey: "user_id",
   as: "user",
   onDelete: "CASCADE"
+});
+
+db.user.hasMany(db.clockRecord, {
+  foreignKey: "user_id",
+  as: "clockRecords"
+});
+
+db.clockRecord.belongsTo(db.shift, {
+  foreignKey: "shift_id",
+  as: "shift",
+  onDelete: "SET NULL"
+});
+
+db.shift.hasMany(db.clockRecord, {
+  foreignKey: "shift_id",
+  as: "clockRecords"
 });
 
 
