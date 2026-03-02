@@ -1,5 +1,5 @@
 // Test setup file
-import { beforeAll, afterAll } from '@jest/globals';
+const { beforeAll, afterAll } = require('@jest/globals');
 
 // Set test environment variables
 process.env.NODE_ENV = 'test';

@@ -1,5 +1,8 @@
 import db from "../models/index.js";
 import { Op } from "sequelize";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
 
 const User = db.user;
 const Qualification = db.qualification;
@@ -7,6 +10,45 @@ const UserQualification = db.userQualification;
 const Position = db.position;
 const PositionQualification = db.positionQualification;
 const Shift = db.shift;
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = 'uploads/qualifications';
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const extension = path.extname(file.originalname);
+    cb(null, file.fieldname + '-' + uniqueSuffix + extension);
+  }
+});
+
+const fileFilter = (req, file, cb) => {
+  const allowedMimes = [
+    'application/pdf',
+    'image/png',
+    'image/jpeg',
+    'image/jpg'
+  ];
+  
+  if (allowedMimes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Invalid file type. Only PDF, PNG, and JPEG files are allowed.'), false);
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB
+  }
+});
 
 // Get all students with their qualifications (optional filter by qualificationId)
 export const getStudentsWithQualifications = async (req, res) => {
@@ -59,6 +101,11 @@ export const getStudentsWithQualifications = async (req, res) => {
           approval_status: qual.userQualification?.approval_status || 'PENDING',
           approved_at: qual.userQualification?.approved_at,
           document_name: qual.userQualification?.document_name,
+          evidence_filename: qual.userQualification?.evidence_filename,
+          evidence_mime_type: qual.userQualification?.evidence_mime_type,
+          evidence_url: qual.userQualification?.evidence_url,
+          evidence_type: qual.userQualification?.evidence_type,
+          submitted_at: qual.userQualification?.submitted_at,
           user_qualification_id: qual.userQualification?.user_qualification_id
         }))
       };
@@ -118,6 +165,11 @@ export const getStudentQualifications = async (req, res) => {
       approval_status: uq.approval_status,
       approved_at: uq.approved_at,
       document_name: uq.document_name,
+      evidence_filename: uq.evidence_filename,
+      evidence_mime_type: uq.evidence_mime_type,
+      evidence_url: uq.evidence_url,
+      evidence_type: uq.evidence_type,
+      submitted_at: uq.submitted_at,
       approved_by: uq.approver ? `${uq.approver.fName} ${uq.approver.lName}` : null
     }));
 
@@ -277,7 +329,125 @@ export const checkUserQualificationForPosition = async (req, res) => {
   } catch (error) {
     console.error('Error checking user qualification for position:', error);
     res.status(500).send({
-      message: "Error checking user qualification for position."
+      message: `Error checking user qualification: ${error.message}`
+    });
+  }
+};
+
+// Upload qualification evidence for current user
+export const uploadQualificationEvidence = async (req, res) => {
+  try {
+    const { qualification_id, evidence_type } = req.body;
+    const file = req.file;
+
+    // Validate required fields
+    if (!file) {
+      return res.status(400).send({
+        message: "File is required."
+      });
+    }
+
+    if (!qualification_id) {
+      return res.status(400).send({
+        message: "qualification_id is required."
+      });
+    }
+
+    if (!evidence_type || !['RESUME', 'CERTIFICATE', 'OTHER'].includes(evidence_type)) {
+      return res.status(400).send({
+        message: "evidence_type must be one of: RESUME, CERTIFICATE, OTHER"
+      });
+    }
+
+    // Get current user from session
+    let token = null;
+    let authHeader = req.get("authorization");
+    
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      token = authHeader.slice(7);
+    }
+
+    const session = await db.session.findOne({
+      where: { token: token },
+      include: [{ model: db.user, as: 'user' }]
+    });
+
+    if (!session || session.expirationDate < Date.now()) {
+      return res.status(401).send({
+        message: "Unauthorized! Invalid or expired token."
+      });
+    }
+
+    const user = session.user;
+
+    // Verify user is a student
+    if (user.role !== 'student') {
+      return res.status(403).send({
+        message: "Only students can upload qualification evidence."
+      });
+    }
+
+    // Verify qualification exists
+    const qualification = await Qualification.findByPk(qualification_id);
+    if (!qualification) {
+      return res.status(404).send({
+        message: "Qualification not found."
+      });
+    }
+
+    // Check if user qualification already exists
+    let userQualification = await UserQualification.findOne({
+      where: {
+        user_id: user.id,
+        qualification_id: qualification_id
+      }
+    });
+
+    const evidenceUrl = `/uploads/qualifications/${file.filename}`;
+    const now = new Date();
+
+    if (userQualification) {
+      // Update existing record
+      await userQualification.update({
+        evidence_filename: file.originalname,
+        evidence_mime_type: file.mimetype,
+        evidence_url: evidenceUrl,
+        evidence_type: evidence_type,
+        submitted_at: now,
+        approval_status: 'PENDING', // Reset to pending on re-upload
+        approved_by_user_id: null,
+        approved_at: null
+      });
+    } else {
+      // Create new record
+      userQualification = await UserQualification.create({
+        user_id: user.id,
+        qualification_id: qualification_id,
+        evidence_filename: file.originalname,
+        evidence_mime_type: file.mimetype,
+        evidence_url: evidenceUrl,
+        evidence_type: evidence_type,
+        submitted_at: now,
+        approval_status: 'PENDING'
+      });
+    }
+
+    // Return the updated/created record
+    const result = await UserQualification.findByPk(userQualification.user_qualification_id, {
+      include: [
+        {
+          model: Qualification,
+          as: 'qualification',
+          attributes: ['qualification_id', 'qualification_name', 'description', 'requires_document']
+        }
+      ]
+    });
+
+    res.status(201).send(result);
+  } catch (error) {
+    console.error('Upload error:', error);
+    res.status(500).send({
+      message: `Error uploading qualification evidence: ${error.message}`
     });
   }
 };
