@@ -1,15 +1,21 @@
-describe("server", () => {
-  const db = jest.mock("../app/models", () => ({
-    sequelize: {
-      sync: jest.fn(),
-    },
-    Sequelize: {
-      Op: jest.fn(),
-    },
-  }));
+import { jest } from '@jest/globals';
+import request from "supertest";
 
-  const app = require("../server.js");
-  const request = require("supertest");
+jest.mock("../app/models", () => ({
+  sequelize: {
+    sync: jest.fn(),
+  },
+  Sequelize: {
+    Op: jest.fn(),
+  },
+}));
+
+describe("server", () => {
+  let app;
+
+  beforeAll(async () => {
+    app = (await import("../server.js")).default;
+  });
 
   it("responds with welcome message", async () => {
     await request(app)
