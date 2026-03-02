@@ -195,6 +195,13 @@ exports.login = async (req, res) => {
 
   if (res.headersSent) return;
 
+  if (user?.id !== undefined && user?.is_active === false) {
+    logger.warn(`Login blocked for inactive user: ${email}`);
+    return res.status(403).send({
+      message: "Your account is inactive. Please contact your manager.",
+    });
+  }
+
   try {
     assignedRole = await resolveHighestRoleForUser(user.id, email);
   } catch (err) {
