@@ -6,14 +6,122 @@ const User = db.user;
 const Op = db.Sequelize.Op;
 
 const exports = {};
+const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)(:[0-5]\d)?$/;
+
+const normalizeTime = (timeValue) =>
+  timeValue && timeValue.length === 5 ? `${timeValue}:00` : timeValue;
+
+const toSeconds = (timeValue) => {
+  const normalized = normalizeTime(timeValue);
+  const [hours, minutes, seconds] = normalized.split(":").map(Number);
+  return (hours * 60 + minutes) * 60 + seconds;
+};
+
+const validateTimeRange = (startTime, endTime) => {
+  if (!TIME_PATTERN.test(startTime) || !TIME_PATTERN.test(endTime)) {
+    return {
+      valid: false,
+      message: "Invalid time format. Use HH:mm or HH:mm:ss.",
+    };
+  }
+
+  if (toSeconds(startTime) >= toSeconds(endTime)) {
+    return {
+      valid: false,
+      message: "startTime must be earlier than endTime.",
+    };
+  }
+
+  return { valid: true };
+};
+
+const hasAvailabilityConflict = async ({
+  userId,
+  startTime,
+  endTime,
+  specificDate,
+  dayOfWeek,
+  excludeId,
+}) => {
+  const where = {
+    userId,
+    [Op.and]: [
+      { startTime: { [Op.lt]: normalizeTime(endTime) } },
+      { endTime: { [Op.gt]: normalizeTime(startTime) } },
+    ],
+  };
+
+  if (excludeId) {
+    where[Op.and].push({ id: { [Op.ne]: excludeId } });
+  }
+
+  if (specificDate) {
+    where.specificDate = specificDate;
+  } else if (dayOfWeek !== undefined && dayOfWeek !== null && dayOfWeek !== "") {
+    where.dayOfWeek = dayOfWeek;
+  }
+
+  const existing = await Availability.findOne({ where });
+  return Boolean(existing);
+};
+
+const toPlainAvailability = (record) =>
+  record && typeof record.get === "function" ? record.get({ plain: true }) : record;
+
+const markConflicts = (records) => {
+  const plain = records.map(toPlainAvailability);
+  const conflictIds = new Set();
+  const grouped = new Map();
+
+  for (const item of plain) {
+    const scopeKey = item.specificDate
+      ? `${item.userId}|date:${item.specificDate}`
+      : `${item.userId}|dow:${item.dayOfWeek ?? "none"}`;
+    if (!grouped.has(scopeKey)) {
+      grouped.set(scopeKey, []);
+    }
+    grouped.get(scopeKey).push(item);
+  }
+
+  for (const items of grouped.values()) {
+    const ordered = items
+      .filter((entry) => entry.startTime && entry.endTime)
+      .sort((a, b) => toSeconds(a.startTime) - toSeconds(b.startTime));
+
+    for (let i = 0; i < ordered.length; i += 1) {
+      for (let j = i + 1; j < ordered.length; j += 1) {
+        if (toSeconds(ordered[j].startTime) < toSeconds(ordered[i].endTime)) {
+          conflictIds.add(ordered[i].id);
+          conflictIds.add(ordered[j].id);
+        } else {
+          break;
+        }
+      }
+    }
+  }
+
+  return plain.map((item) => ({
+    ...item,
+    hasConflict: conflictIds.has(item.id),
+  }));
+};
 
 // Create and Save a new Availability
-exports.create = (req, res) => {
+exports.create = async (req, res) => {
   // Validate request
-  if (!req.body.startTime || !req.body.endTime) {
+  if (!req.body.userId || !req.body.startTime || !req.body.endTime) {
     logger.warn('Availability creation attempt with missing time fields');
     res.status(400).send({
-      message: "Start time and end time are required!",
+      message: "userId, startTime, and endTime are required!",
+    });
+    return;
+  }
+
+  const timeValidation = validateTimeRange(req.body.startTime, req.body.endTime);
+  if (!timeValidation.valid) {
+    logger.warn(`Availability creation rejected due to invalid time fields: ${timeValidation.message}`);
+    res.status(400).send({
+      message: timeValidation.message,
     });
     return;
   }
@@ -23,8 +131,8 @@ exports.create = (req, res) => {
     userId: req.body.userId,
     departmentId: req.body.departmentId || null,
     dayOfWeek: req.body.dayOfWeek || null,
-    startTime: req.body.startTime,
-    endTime: req.body.endTime,
+    startTime: normalizeTime(req.body.startTime),
+    endTime: normalizeTime(req.body.endTime),
     availabilityType: req.body.availabilityType || 'available',
     specificDate: req.body.specificDate || null,
     isRecurring: req.body.isRecurring || false,
@@ -39,29 +147,48 @@ exports.create = (req, res) => {
 
   logger.debug(`Creating availability for user: ${availability.userId}`);
 
-  // Save Availability in the database
-  Availability.create(availability)
-    .then((data) => {
-      logger.info(`Availability created successfully: ${data.id}`);
-      res.send(data);
-    })
-    .catch((err) => {
-      logger.error(`Error creating availability: ${err.message}`);
-      res.status(500).send({
-        message:
-          err.message || "Some error occurred while creating the Availability.",
-      });
+  try {
+    const conflictExists = await hasAvailabilityConflict({
+      userId: availability.userId,
+      startTime: availability.startTime,
+      endTime: availability.endTime,
+      specificDate: availability.specificDate,
+      dayOfWeek: availability.dayOfWeek,
     });
+
+    if (conflictExists) {
+      logger.warn(`Availability conflict detected for user ${availability.userId}`);
+      res.status(409).send({
+        message:
+          "Availability overlaps with an existing record. Please choose a non-conflicting time range.",
+      });
+      return;
+    }
+
+    const data = await Availability.create(availability);
+    logger.info(`Availability created successfully: ${data.id}`);
+    res.send(data);
+  } catch (err) {
+    logger.error(`Error creating availability: ${err.message}`);
+    res.status(500).send({
+      message:
+        err.message || "Some error occurred while creating the Availability.",
+    });
+  }
 };
 
 // Retrieve all Availabilities from the database
-exports.findAll = (req, res) => {
+exports.findAll = async (req, res) => {
   const userId = req.query.userId;
   const departmentId = req.query.departmentId;
   const requestStatus = req.query.requestStatus;
   const availabilityType = req.query.availabilityType;
+  const dayOfWeek = req.query.dayOfWeek;
+  const specificDate = req.query.specificDate;
+  const startTimeFrom = req.query.startTimeFrom;
+  const startTimeTo = req.query.startTimeTo;
 
-  let condition = {};
+  const condition = {};
   
   if (userId) {
     condition.userId = userId;
@@ -75,62 +202,90 @@ exports.findAll = (req, res) => {
   if (availabilityType) {
     condition.availabilityType = availabilityType;
   }
+  if (dayOfWeek !== undefined && dayOfWeek !== null && dayOfWeek !== "") {
+    condition.dayOfWeek = dayOfWeek;
+  }
+  if (specificDate) {
+    condition.specificDate = specificDate;
+  }
+
+  if (startTimeFrom || startTimeTo) {
+    if (startTimeFrom && !TIME_PATTERN.test(startTimeFrom)) {
+      return res.status(400).send({
+        message: "Invalid startTimeFrom format. Use HH:mm or HH:mm:ss.",
+      });
+    }
+    if (startTimeTo && !TIME_PATTERN.test(startTimeTo)) {
+      return res.status(400).send({
+        message: "Invalid startTimeTo format. Use HH:mm or HH:mm:ss.",
+      });
+    }
+    condition.startTime = {};
+    if (startTimeFrom) {
+      condition.startTime[Op.gte] = normalizeTime(startTimeFrom);
+    }
+    if (startTimeTo) {
+      condition.startTime[Op.lte] = normalizeTime(startTimeTo);
+    }
+  }
 
   logger.debug(`Fetching availabilities with condition: ${JSON.stringify(condition)}`);
 
-  Availability.findAll({ 
-    where: condition,
-    include: [
-      {
-        model: User,
-        as: 'user',
-        attributes: ['id', 'fName', 'lName', 'email']
-      },
-      {
-        model: User,
-        as: 'approver',
-        attributes: ['id', 'fName', 'lName', 'email']
-      }
-    ]
-  })
-    .then((data) => {
-      logger.info(`Retrieved ${data.length} availabilities`);
-      res.send(data);
-    })
-    .catch((err) => {
-      logger.error(`Error retrieving availabilities: ${err.message}`);
-      res.status(500).send({
-        message: err.message || "Some error occurred while retrieving availabilities.",
-      });
+  try {
+    const data = await Availability.findAll({ 
+      where: condition,
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'fName', 'lName', 'email']
+        },
+        {
+          model: User,
+          as: 'approver',
+          attributes: ['id', 'fName', 'lName', 'email']
+        }
+      ]
     });
+
+    const responseWithConflicts = markConflicts(data);
+    logger.info(`Retrieved ${responseWithConflicts.length} availabilities`);
+    res.send(responseWithConflicts);
+  } catch (err) {
+    logger.error(`Error retrieving availabilities: ${err.message}`);
+    res.status(500).send({
+      message: err.message || "Some error occurred while retrieving availabilities.",
+    });
+  }
 };
 
 // Retrieve all Availabilities for a specific user
-exports.findAllForUser = (req, res) => {
+exports.findAllForUser = async (req, res) => {
   const userId = req.params.userId;
 
   logger.debug(`Fetching availabilities for user: ${userId}`);
 
-  Availability.findAll({ 
-    where: { userId: userId },
-    include: [
-      {
-        model: User,
-        as: 'approver',
-        attributes: ['id', 'fName', 'lName', 'email']
-      }
-    ]
-  })
-    .then((data) => {
-      logger.info(`Retrieved ${data.length} availabilities for user ${userId}`);
-      res.send(data);
-    })
-    .catch((err) => {
-      logger.error(`Error retrieving availabilities for user ${userId}: ${err.message}`);
-      res.status(500).send({
-        message: err.message || "Some error occurred while retrieving availabilities.",
-      });
+  try {
+    const data = await Availability.findAll({ 
+      where: { userId: userId },
+      include: [
+        {
+          model: User,
+          as: 'approver',
+          attributes: ['id', 'fName', 'lName', 'email']
+        }
+      ]
     });
+
+    const responseWithConflicts = markConflicts(data);
+    logger.info(`Retrieved ${responseWithConflicts.length} availabilities for user ${userId}`);
+    res.send(responseWithConflicts);
+  } catch (err) {
+    logger.error(`Error retrieving availabilities for user ${userId}: ${err.message}`);
+    res.status(500).send({
+      message: err.message || "Some error occurred while retrieving availabilities.",
+    });
+  }
 };
 
 // Find a single Availability with an id
@@ -172,33 +327,88 @@ exports.findOne = (req, res) => {
 };
 
 // Update an Availability by the id
-exports.update = (req, res) => {
+exports.update = async (req, res) => {
   const id = req.params.id;
 
   logger.debug(`Updating availability with id: ${id}`);
 
-  Availability.update(req.body, {
-    where: { id: id },
-  })
-    .then((num) => {
-      if (num == 1) {
-        logger.info(`Availability updated successfully: ${id}`);
-        res.send({
-          message: "Availability was updated successfully.",
-        });
-      } else {
-        logger.warn(`Cannot update availability with id ${id}. Availability not found or req.body is empty`);
-        res.send({
-          message: `Cannot update Availability with id=${id}. Maybe Availability was not found or req.body is empty!`,
-        });
-      }
-    })
-    .catch((err) => {
-      logger.error(`Error updating availability ${id}: ${err.message}`);
-      res.status(500).send({
-        message: `Error updating Availability with id=${id}`,
+  try {
+    const existing = await Availability.findByPk(id);
+    if (!existing) {
+      logger.warn(`Availability not found with id ${id} for update`);
+      res.status(404).send({
+        message: `Cannot find Availability with id=${id}.`,
       });
+      return;
+    }
+
+    const effectiveStartTime = req.body.startTime || existing.startTime;
+    const effectiveEndTime = req.body.endTime || existing.endTime;
+    const effectiveSpecificDate =
+      req.body.specificDate !== undefined
+        ? req.body.specificDate
+        : existing.specificDate;
+    const effectiveDayOfWeek =
+      req.body.dayOfWeek !== undefined ? req.body.dayOfWeek : existing.dayOfWeek;
+    const effectiveUserId = req.body.userId || existing.userId;
+
+    const timeValidation = validateTimeRange(effectiveStartTime, effectiveEndTime);
+    if (!timeValidation.valid) {
+      logger.warn(`Availability update rejected due to invalid time fields: ${timeValidation.message}`);
+      res.status(400).send({
+        message: timeValidation.message,
+      });
+      return;
+    }
+
+    const conflictExists = await hasAvailabilityConflict({
+      userId: effectiveUserId,
+      startTime: effectiveStartTime,
+      endTime: effectiveEndTime,
+      specificDate: effectiveSpecificDate,
+      dayOfWeek: effectiveDayOfWeek,
+      excludeId: id,
     });
+
+    if (conflictExists) {
+      logger.warn(`Availability update conflict detected for id=${id}`);
+      res.status(409).send({
+        message:
+          "Availability overlaps with an existing record. Please choose a non-conflicting time range.",
+      });
+      return;
+    }
+
+    const updatePayload = { ...req.body };
+    if (updatePayload.startTime) {
+      updatePayload.startTime = normalizeTime(updatePayload.startTime);
+    }
+    if (updatePayload.endTime) {
+      updatePayload.endTime = normalizeTime(updatePayload.endTime);
+    }
+
+    const [num] = await Availability.update(updatePayload, {
+      where: { id: id },
+    });
+
+    if (num === 1) {
+      logger.info(`Availability updated successfully: ${id}`);
+      res.send({
+        message: "Availability was updated successfully.",
+      });
+      return;
+    }
+
+    logger.warn(`Cannot update availability with id ${id}. Availability not found or req.body is empty`);
+    res.send({
+      message: `Cannot update Availability with id=${id}. Maybe Availability was not found or req.body is empty!`,
+    });
+  } catch (err) {
+    logger.error(`Error updating availability ${id}: ${err.message}`);
+    res.status(500).send({
+      message: `Error updating Availability with id=${id}`,
+    });
+  }
 };
 
 // Delete an Availability with the specified id

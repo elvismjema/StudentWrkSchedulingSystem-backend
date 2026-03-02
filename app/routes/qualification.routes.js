@@ -1,28 +1,28 @@
 import express from "express";
-import * as qualificationController from "../controllers/qualification.controller.js";
-import { isManager } from "../authorization/roleAuth.js";
-import authenticate from "../authorization/authorization.js";
+import {
+  createQualification,
+  listQualifications,
+  getQualificationById,
+  updateQualification,
+  deleteQualification,
+  uploadQualificationDocument,
+  listStudentsWithQualifications,
+  getStudentQualifications,
+  reviewQualificationDocument,
+} from "../controllers/qualification.controller.js";
+import { verifyToken } from "../middleware/authJwt.js";
+import requireManager from "../authorization/requireManager.js";
 
 const router = express.Router();
 
-// Get all students with their qualifications (optional filter by qualificationId)
-// Manager-only - matches frontend path: students/qualifications
-router.get("/students/qualifications", [authenticate, isManager], qualificationController.getStudentsWithQualifications);
-
-// Get qualifications for a specific student
-// Manager-only - matches frontend path: students/:userId/qualifications
-router.get("/students/:userId/qualifications", [authenticate, isManager], qualificationController.getStudentQualifications);
-
-// Get required qualifications for a position
-// Manager-only - matches frontend path: positions/:positionId/required-qualifications
-router.get("/positions/:positionId/required-qualifications", [authenticate, isManager], qualificationController.getPositionRequiredQualifications);
-
-// Get all available qualifications
-// Authenticated users - matches frontend path: qualifications
-router.get("/qualifications", [authenticate], qualificationController.getAllQualifications);
-
-// Check if user is qualified for a position
-// Manager-only - matches frontend path: qualifications/check
-router.post("/qualifications/check", [authenticate, isManager], qualificationController.checkUserQualificationForPosition);
+router.post("/", [verifyToken], createQualification);
+router.get("/", [verifyToken], listQualifications);
+router.get("/students/qualifications", [verifyToken, requireManager], listStudentsWithQualifications);
+router.get("/students/:userId/qualifications", [verifyToken, requireManager], getStudentQualifications);
+router.put("/user-qualifications/:id/review", [verifyToken, requireManager], reviewQualificationDocument);
+router.post("/upload", [verifyToken], uploadQualificationDocument);
+router.get("/:id", [verifyToken], getQualificationById);
+router.put("/:id", [verifyToken], updateQualification);
+router.delete("/:id", [verifyToken], deleteQualification);
 
 export default router;
