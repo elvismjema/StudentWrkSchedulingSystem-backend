@@ -1,5 +1,6 @@
 import userDepartment from "../controllers/user_department.controller.js";
 import authenticate from "../authorization/authorization.js";
+import requireManager from "../authorization/requireManager.js";
 import { Router } from "express";
 
 var router = Router();
@@ -17,13 +18,13 @@ router.get("/user/:userId", [authenticate], userDepartment.listUserDepartments);
 router.put("/leave/:id", [authenticate], userDepartment.leaveDepar);
 
 // Admin: Get all users with their roles
-router.get("/admin/users-with-roles", [authenticate], userDepartment.getAllUsersWithRoles);
+router.get("/admin/users-with-roles", [authenticate, requireManager], userDepartment.getAllUsersWithRoles);
 
 // Admin: Assign or update user role
-router.post("/admin/assign-role", [authenticate], userDepartment.assignUserRole);
+router.post("/admin/assign-role", [authenticate, requireManager], userDepartment.assignUserRole);
 
 // Admin: Remove user role from department
-router.delete("/admin/remove-role/:id", [authenticate], userDepartment.removeUserRole);
+router.delete("/admin/remove-role/:id", [authenticate, requireManager], userDepartment.removeUserRole);
 
 // Get user's active roles across all departments
 router.get("/roles/:userId", [authenticate], userDepartment.getUserRoles);

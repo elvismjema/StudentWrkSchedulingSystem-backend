@@ -1,32 +1,13 @@
 import db  from "../models/index.js";
 import { randomBytes } from "crypto";
 import logger from "../config/logger.js";
+import { resolveHighestRoleForUser } from "../authorization/roleAccess.js";
 
 const User = db.user;
 const Session = db.session;
 const Op = db.Sequelize.Op;
 
 const google_id = process.env.CLIENT_ID;
-const STUDENT_EMAIL = "elvis.mjema@eagles.oc.edu".toLowerCase();
-const MANAGER_EMAILS = new Set([
-  "elvismjema04@gmail.com",
-  "byibonheur@gmail.com",
-  "muhirejonathan123@gmail.com",
-].map((email) => email.toLowerCase()));
-
-const determineRoleByEmail = (email) => {
-  const normalizedEmail = (email || "").toLowerCase().trim();
-
-  if (normalizedEmail === STUDENT_EMAIL) {
-    return "student";
-  }
-
-  if (MANAGER_EMAILS.has(normalizedEmail)) {
-    return "manager";
-  }
-
-  return "student";
-};
 
 const exports = {};
 
@@ -137,10 +118,9 @@ exports.login = async (req, res) => {
     return res.status(400).send({ message: "Email is required for login." });
   }
 
-  const assignedRole = determineRoleByEmail(email);
-
   let user = {};
   let session = {};
+  let assignedRole = "student";
 
   logger.debug(`Looking up user by email: ${email}`);
   
@@ -186,6 +166,12 @@ exports.login = async (req, res) => {
   }
 
   if (res.headersSent) return;
+
+  try {
+    assignedRole = await resolveHighestRoleForUser(user.id, email);
+  } catch (err) {
+    logger.error(`Error determining role for user ${user.id}: ${err.message}`);
+  }
 
   if (user.id !== undefined) {
     
