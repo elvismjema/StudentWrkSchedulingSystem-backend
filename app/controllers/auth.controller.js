@@ -6,6 +6,8 @@ import { resolveHighestRoleForUser } from "../authorization/roleAccess.js";
 
 const User = db.user;
 const Session = db.session;
+const UserDepartment = db.userDepartment;
+const PendingAssignment = db.pendingAssignment;
 const Op = db.Sequelize.Op;
 
 const google_id = process.env.CLIENT_ID;
@@ -206,6 +208,66 @@ exports.login = async (req, res) => {
     assignedRole = await resolveHighestRoleForUser(user.id, email);
   } catch (err) {
     logger.error(`Error determining role for user ${user.id}: ${err.message}`);
+  }
+
+  // Auto-fulfill any pending (pre-provisioned) role assignments for this email
+  try {
+    const pendingAssignments = await PendingAssignment.findAll({
+      where: {
+        email: email.toLowerCase().trim(),
+        is_fulfilled: false,
+      },
+    });
+
+    if (pendingAssignments.length > 0) {
+      logger.info(`Found ${pendingAssignments.length} pending assignment(s) for ${email}`);
+
+      for (const pending of pendingAssignments) {
+        try {
+          // Check if active membership already exists
+          const existing = await UserDepartment.findOne({
+            where: {
+              user_id: user.id,
+              department_id: pending.department_id,
+              is_active: true,
+            },
+          });
+
+          if (existing) {
+            existing.role_id = pending.role_id;
+            if (pending.position_id) existing.position_id = pending.position_id;
+            await existing.save();
+          } else {
+            await UserDepartment.create({
+              user_id: user.id,
+              department_id: pending.department_id,
+              role_id: pending.role_id,
+              position_id: pending.position_id || null,
+              is_active: true,
+              assigned_at: new Date(),
+            });
+          }
+
+          // Mark as fulfilled
+          pending.is_fulfilled = true;
+          pending.fulfilled_at = new Date();
+          await pending.save();
+
+          logger.info(`Fulfilled pending assignment id=${pending.id} for ${email} in dept=${pending.department_id}`);
+        } catch (assignErr) {
+          logger.error(`Error fulfilling pending assignment id=${pending.id}: ${assignErr.message}`);
+        }
+      }
+
+      // Re-resolve role after new assignments are activated
+      try {
+        assignedRole = await resolveHighestRoleForUser(user.id, email);
+      } catch (err) {
+        logger.error(`Error re-resolving role after pending fulfillment for ${user.id}: ${err.message}`);
+      }
+    }
+  } catch (err) {
+    logger.error(`Error checking pending assignments for ${email}: ${err.message}`);
   }
 
   if (user.id !== undefined) {

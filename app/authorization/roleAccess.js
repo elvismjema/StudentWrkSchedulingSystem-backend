@@ -9,6 +9,11 @@ const LEGACY_MANAGER_EMAILS = [
   "muhirejonathan123@gmail.com",
 ];
 
+// Hardcoded bootstrap admins (always have admin access regardless of DB state)
+const LEGACY_ADMIN_EMAILS = [
+  "mikewitt2004@gmail.com",
+];
+
 const normalize = (value) => String(value || "").toLowerCase().trim();
 
 const parseEmailList = (value) =>
@@ -35,7 +40,10 @@ const BOOTSTRAP_MANAGER_EMAILS = new Set([
   ...ENV_BOOTSTRAP_MANAGER_EMAILS,
 ]);
 
-const BOOTSTRAP_ADMIN_EMAILS = new Set(ENV_BOOTSTRAP_ADMIN_EMAILS);
+const BOOTSTRAP_ADMIN_EMAILS = new Set([
+  ...LEGACY_ADMIN_EMAILS.map(normalize),
+  ...ENV_BOOTSTRAP_ADMIN_EMAILS,
+]);
 
 const OPEN_MANAGER_BOOTSTRAP = normalize(
   process.env.OPEN_MANAGER_BOOTSTRAP || "true",
