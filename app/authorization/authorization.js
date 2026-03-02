@@ -18,6 +18,12 @@ const authenticate = (req, res, next) => {
             logger.debug(`Token validation - expiration: ${session.expirationDate}`);
             if (session.expirationDate >= Date.now()) {
               logger.debug('Token valid, authentication successful');
+              req.auth = {
+                userId: session.userId,
+                email: session.email,
+                token: session.token,
+                sessionId: session.id,
+              };
               next();
               return;
             } else {

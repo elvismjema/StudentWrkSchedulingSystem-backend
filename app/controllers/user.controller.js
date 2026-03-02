@@ -2,6 +2,8 @@ import db  from "../models/index.js";
 import logger from "../config/logger.js";
 
 const User = db.user;
+const Shift = db.shift;
+const Session = db.session;
 const Op = db.Sequelize.Op;
 const exports = {};
 // Create and Save a new User
@@ -21,6 +23,7 @@ exports.create = (req, res) => {
     fName: req.body.fName,
     lName: req.body.lName,
     email: req.body.email,
+    role: req.body.role || "student",
     // refresh_token: req.body.refresh_token,
     // expiration_date: req.body.expiration_date
   };
@@ -176,6 +179,114 @@ exports.delete = (req, res) => {
         message: "Could not delete User with id=" + id,
       });
     });
+};
+
+// Deactivate a user account (manager action)
+exports.deactivateUser = async (req, res) => {
+  const id = Number(req.params.id);
+  const removeFutureShifts =
+    req.body?.remove_future_shifts === true ||
+    req.body?.removeFutureShifts === true;
+
+  if (!id) {
+    return res.status(400).send({
+      message: "Valid user id is required.",
+    });
+  }
+
+  try {
+    const user = await User.findByPk(id);
+
+    if (!user) {
+      return res.status(404).send({
+        message: `Cannot find User with id=${id}.`,
+      });
+    }
+
+    if (user.is_active === false) {
+      return res.send({
+        success: true,
+        message: "User is already inactive.",
+        data: {
+          id: user.id,
+          is_active: false,
+          deactivated_at: user.deactivated_at,
+          removed_future_shifts: 0,
+        },
+      });
+    }
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const futureShiftWhere = {
+      assigned_user_id: id,
+      shift_date: {
+        [Op.gte]: todayIso,
+      },
+      trade_status: {
+        [Op.or]: [
+          { [Op.eq]: null },
+          { [Op.ne]: "cancelled" },
+        ],
+      },
+    };
+
+    const futureShifts = await Shift.findAll({
+      where: futureShiftWhere,
+      order: [["shift_date", "ASC"], ["start_time", "ASC"]],
+    });
+
+    if (futureShifts.length > 0 && !removeFutureShifts) {
+      return res.status(409).send({
+        success: false,
+        message: "This student has future shifts assigned. Deactivate with shift removal to continue.",
+        requires_shift_removal: true,
+        future_shift_count: futureShifts.length,
+        future_shifts: futureShifts.map((shift) => ({
+          shift_id: shift.shift_id,
+          shift_date: shift.shift_date,
+          start_time: shift.start_time,
+          end_time: shift.end_time,
+          department_id: shift.department_id,
+          position_id: shift.position_id,
+        })),
+      });
+    }
+
+    let removedFutureShifts = 0;
+    if (futureShifts.length > 0 && removeFutureShifts) {
+      removedFutureShifts = await Shift.destroy({
+        where: futureShiftWhere,
+      });
+    }
+
+    user.is_active = false;
+    user.deactivated_at = new Date();
+    await user.save();
+
+    await Session.update(
+      { token: "" },
+      {
+        where: {
+          email: user.email,
+        },
+      },
+    );
+
+    return res.send({
+      success: true,
+      message: "User deactivated successfully.",
+      data: {
+        id: user.id,
+        is_active: user.is_active,
+        deactivated_at: user.deactivated_at,
+        removed_future_shifts: removedFutureShifts,
+      },
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err.message || "Error deactivating user.",
+    });
+  }
 };
 
 

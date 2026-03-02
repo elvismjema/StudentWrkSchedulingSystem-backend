@@ -10,6 +10,11 @@ const Position = SequelizeInstance.define(
       primaryKey: true,
       field: "position_id"
     },
+    department_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "department_id"
+    },
     position_name: {
       type: DataTypes.STRING,
       allowNull: false,
@@ -19,11 +24,6 @@ const Position = SequelizeInstance.define(
       type: DataTypes.TEXT,
       allowNull: true,
       field: "description"
-    },
-    department_id: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
-      field: "department_id"
     },
     created_at: {
       type: DataTypes.DATE,

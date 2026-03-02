@@ -1,5 +1,6 @@
   import users from "../controllers/user.controller.js";
   import  authenticate from "../authorization/authorization.js";
+  import requireManager from "../authorization/requireManager.js";
   import { Router } from "express";
   var router = Router()
 
@@ -9,6 +10,9 @@
 
   // Retrieve all People
   router.get("/", [authenticate], users.findAll);
+
+  // Deactivate a User account
+  router.patch("/:id/deactivate", [authenticate, requireManager], users.deactivateUser);
 
   // Retrieve a single User with id
   router.get("/:id", [authenticate], users.findOne);
