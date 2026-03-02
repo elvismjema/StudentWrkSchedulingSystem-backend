@@ -3,12 +3,6 @@ import db from "../models/index.js";
 const UserDepartment = db.userDepartment;
 const Role = db.role;
 
-const LEGACY_MANAGER_EMAILS = [
-  "elvismjema04@gmail.com",
-  "byibonheur@gmail.com",
-  "muhirejonathan123@gmail.com",
-];
-
 const normalize = (value) => String(value || "").toLowerCase().trim();
 
 const parseEmailList = (value) =>
@@ -30,10 +24,7 @@ const ENV_BOOTSTRAP_ADMIN_EMAILS = parseEmailList(
   process.env.BOOTSTRAP_ADMIN_EMAILS || "",
 );
 
-const BOOTSTRAP_MANAGER_EMAILS = new Set([
-  ...LEGACY_MANAGER_EMAILS.map(normalize),
-  ...ENV_BOOTSTRAP_MANAGER_EMAILS,
-]);
+const BOOTSTRAP_MANAGER_EMAILS = new Set(ENV_BOOTSTRAP_MANAGER_EMAILS);
 
 const BOOTSTRAP_ADMIN_EMAILS = new Set(ENV_BOOTSTRAP_ADMIN_EMAILS);
 
