@@ -1,37 +1,122 @@
 import db  from "../models/index.js";
-import authconfig  from "../config/auth.config.js";
-import { OAuth2Client } from "google-auth-library";
-import  { google } from "googleapis";
-import jwt from "jsonwebtoken";
+import { randomBytes } from "crypto";
+import https from "https";
 import logger from "../config/logger.js";
+import { resolveHighestRoleForUser } from "../authorization/roleAccess.js";
 
 const User = db.user;
 const Session = db.session;
+const UserDepartment = db.userDepartment;
+const PendingAssignment = db.pendingAssignment;
 const Op = db.Sequelize.Op;
-
-let googleUser = {};
 
 const google_id = process.env.CLIENT_ID;
 
 const exports = {};
+
+const createSessionToken = () => {
+  // Opaque session token; session validity is enforced via DB session lookup.
+  return randomBytes(48).toString("hex");
+};
+
+const httpsRequestJson = (url, { method = "GET", headers = {}, body } = {}) =>
+  new Promise((resolve, reject) => {
+    const req = https.request(url, { method, headers }, (res) => {
+      let raw = "";
+
+      res.on("data", (chunk) => {
+        raw += chunk;
+      });
+
+      res.on("end", () => {
+        let payload = {};
+
+        if (raw) {
+          try {
+            payload = JSON.parse(raw);
+          } catch (err) {
+            reject(new Error(`Invalid JSON response from Google (status ${res.statusCode})`));
+            return;
+          }
+        }
+
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(payload);
+          return;
+        }
+
+        const message =
+          payload.error_description ||
+          payload.error ||
+          payload.message ||
+          `Google request failed with status ${res.statusCode}`;
+        reject(new Error(message));
+      });
+    });
+
+    req.on("error", (err) => reject(err));
+
+    if (body) {
+      req.write(body);
+    }
+
+    req.end();
+  });
+
+const verifyGoogleIdToken = async (idToken) => {
+  const payload = await httpsRequestJson(
+    `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(
+      idToken,
+    )}`,
+  );
+  
+  if (payload.aud !== google_id) {
+    throw new Error("Google token audience mismatch");
+  }
+
+  return payload;
+};
+
+const fetchGoogleUserInfo = async (accessToken) => {
+  return httpsRequestJson("https://www.googleapis.com/oauth2/v2/userinfo", {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+};
+
+const exchangeGoogleCodeForTokens = async (code) => {
+  const payload = new URLSearchParams({
+    code,
+    client_id: process.env.CLIENT_ID || "",
+    client_secret: process.env.CLIENT_SECRET || "",
+    redirect_uri: "postmessage",
+    grant_type: "authorization_code",
+  });
+
+  return httpsRequestJson("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: payload.toString(),
+  });
+};
 
 exports.login = async (req, res) => {
   logger.info('Login attempt initiated');
 
   var googleToken = req.body.credential;
 
-  const client = new OAuth2Client(google_id);
-  async function verify() {
-    const ticket = await client.verifyIdToken({
-      idToken: googleToken,
-      audience: google_id,
-    });
-    googleUser = ticket.getPayload();
+  let googleUser = {};
+
+  try {
+    googleUser = await verifyGoogleIdToken(googleToken);
     logger.debug(`Google authentication successful for email: ${googleUser.email}`);
-  }
-  await verify().catch((err) => {
+  } catch (err) {
     logger.error(`Google token verification failed: ${err.message}`);
-  });
+    return res.status(401).send({ message: "Invalid Google login token." });
+  }
 
   let email = googleUser.email;
   let firstName = googleUser.given_name || "User";
@@ -45,23 +130,27 @@ exports.login = async (req, res) => {
       lastName === undefined) &&
     req.body.accessToken !== undefined
   ) {
-    logger.debug('Fetching additional user info from Google API');
-    let oauth2Client = new OAuth2Client(google_id); // create new auth client
-    oauth2Client.setCredentials({ access_token: req.body.accessToken }); // use the new auth client with the access_token
-    let oauth2 = google.oauth2({
-      auth: oauth2Client,
-      version: "v2",
-    });
-    let { data } = await oauth2.userinfo.get(); // get user info
-    logger.debug(`Retrieved user info from Google: ${data.email}`);
-    email = data.email;
-    firstName = data.given_name || "User";
-    lastName = data.family_name || "";
+    try {
+      logger.debug('Fetching additional user info from Google API');
+      const data = await fetchGoogleUserInfo(req.body.accessToken);
+      logger.debug(`Retrieved user info from Google: ${data.email}`);
+      email = data.email;
+      firstName = data.given_name || "User";
+      lastName = data.family_name || "";
+    } catch (err) {
+      logger.error(`Error fetching Google user info: ${err.message}`);
+      return res.status(401).send({ message: "Could not retrieve Google user profile." });
+    }
   }
 
+  if (!email) {
+    logger.warn("Login failed: Google account email is missing");
+    return res.status(400).send({ message: "Email is required for login." });
+  }
 
   let user = {};
   let session = {};
+  let assignedRole = "student";
 
   logger.debug(`Looking up user by email: ${email}`);
   
@@ -107,6 +196,79 @@ exports.login = async (req, res) => {
   }
 
   if (res.headersSent) return;
+
+  if (user?.id !== undefined && user?.is_active === false) {
+    logger.warn(`Login blocked for inactive user: ${email}`);
+    return res.status(403).send({
+      message: "Your account is inactive. Please contact your manager.",
+    });
+  }
+
+  try {
+    assignedRole = await resolveHighestRoleForUser(user.id, email);
+  } catch (err) {
+    logger.error(`Error determining role for user ${user.id}: ${err.message}`);
+  }
+
+  // Auto-fulfill any pending (pre-provisioned) role assignments for this email
+  try {
+    const pendingAssignments = await PendingAssignment.findAll({
+      where: {
+        email: email.toLowerCase().trim(),
+        is_fulfilled: false,
+      },
+    });
+
+    if (pendingAssignments.length > 0) {
+      logger.info(`Found ${pendingAssignments.length} pending assignment(s) for ${email}`);
+
+      for (const pending of pendingAssignments) {
+        try {
+          // Check if active membership already exists
+          const existing = await UserDepartment.findOne({
+            where: {
+              user_id: user.id,
+              department_id: pending.department_id,
+              is_active: true,
+            },
+          });
+
+          if (existing) {
+            existing.role_id = pending.role_id;
+            if (pending.position_id) existing.position_id = pending.position_id;
+            await existing.save();
+          } else {
+            await UserDepartment.create({
+              user_id: user.id,
+              department_id: pending.department_id,
+              role_id: pending.role_id,
+              position_id: pending.position_id || null,
+              is_active: true,
+              assigned_at: new Date(),
+            });
+          }
+
+          // Mark as fulfilled
+          pending.is_fulfilled = true;
+          pending.fulfilled_at = new Date();
+          await pending.save();
+
+          logger.info(`Fulfilled pending assignment id=${pending.id} for ${email} in dept=${pending.department_id}`);
+        } catch (assignErr) {
+          logger.error(`Error fulfilling pending assignment id=${pending.id}: ${assignErr.message}`);
+        }
+      }
+
+      // Re-resolve role after new assignments are activated
+      try {
+        assignedRole = await resolveHighestRoleForUser(user.id, email);
+      } catch (err) {
+        logger.error(`Error re-resolving role after pending fulfillment for ${user.id}: ${err.message}`);
+      }
+    }
+  } catch (err) {
+    logger.error(`Error checking pending assignments for ${email}: ${err.message}`);
+  }
 
   if (user.id !== undefined) {
     
@@ -172,6 +334,7 @@ exports.login = async (req, res) => {
             email: user.email,
             fName: user.fName,
             lName: user.lName,
+            role: assignedRole,
             userId: user.id,
             token: session.token,
             // refresh_token: user.refresh_token,
@@ -196,9 +359,7 @@ exports.login = async (req, res) => {
   if (session.id === undefined) {
     // create a new Session with an expiration date and save to database
     logger.info(`Creating new session for ${email}`);
-    let token = jwt.sign({ id: email }, authconfig.secret, {
-      expiresIn: 86400,
-    });
+    let token = createSessionToken();
     let tempExpirationDate = new Date();
     tempExpirationDate.setDate(tempExpirationDate.getDate() + 1);
     const newSession = {
@@ -216,6 +377,7 @@ exports.login = async (req, res) => {
           email: user.email,
           fName: user.fName,
           lName: user.lName,
+          role: assignedRole,
           userId: user.id,
           token: token,
           // refresh_token: user.refresh_token,
@@ -233,17 +395,15 @@ exports.login = async (req, res) => {
 
 exports.authorize = async (req, res) => {
   logger.info(`Authorization request for user: ${req.params.id}`);
-  
-  const oauth2Client = new google.auth.OAuth2(
-    process.env.CLIENT_ID,
-    process.env.CLIENT_SECRET,
-    "postmessage"
-  );
 
-  logger.debug('Exchanging authorization code for tokens');
-  // Get access and refresh tokens (if access_type is offline)
-  let { tokens } = await oauth2Client.getToken(req.body.code);
-  oauth2Client.setCredentials(tokens);
+  let tokens;
+  try {
+    logger.debug('Exchanging authorization code for tokens');
+    tokens = await exchangeGoogleCodeForTokens(req.body.code);
+  } catch (err) {
+    logger.error(`Authorization code exchange failed: ${err.message}`);
+    return res.status(401).send({ message: "Failed to authorize with Google." });
+  }
 
   let user = {};
   logger.debug(`Finding user with id: ${req.params.id}`);
@@ -276,7 +436,7 @@ exports.authorize = async (req, res) => {
     return; // User not found, response already sent
   }
   
-  user.refresh_token = tokens.refresh_token;
+  user.refresh_token = tokens.refresh_token || user.refresh_token;
   let tempExpirationDate = new Date();
   tempExpirationDate.setDate(tempExpirationDate.getDate() + 100);
   user.expiration_date = tempExpirationDate;
