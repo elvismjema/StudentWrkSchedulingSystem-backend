@@ -21,6 +21,7 @@ import DepartmentHoursRoutes from "./department_hours.routes.js";
 import QualificationRoutes from "./qualification.routes.js";
 import UserDepartmentRoutes from "./user_department.routes.js";
 import ManagerRoutes from "./manager.routes.js";
+import AdminRoutes from "./admin.routes.js";
 
 const router = Router();
 
@@ -46,5 +47,6 @@ router.use("/department-hours", DepartmentHoursRoutes);
 router.use("/qualifications", QualificationRoutes);
 router.use("/user-departments", UserDepartmentRoutes);
 router.use("/manager", ManagerRoutes);
+router.use("/admin", AdminRoutes);
 
 export default router;
