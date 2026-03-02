@@ -1,40 +1,48 @@
+import { jest } from '@jest/globals';
+import request from "supertest";
+
+const mockFindAllFunction = jest.fn().mockResolvedValue(Promise.resolve([]));
+const mockFindByPkFunction = jest.fn().mockResolvedValue(Promise.resolve([]));
+
+jest.mock("../../app/models", () => ({
+  sequelize: {
+    sync: jest.fn(),
+  },
+  Sequelize: {
+    Op: {
+      like: jest.fn().mockImplementation(() => true),
+    },
+  },
+  tutorial: {
+    findAll: mockFindAllFunction,
+    findByPk: mockFindByPkFunction,
+  },
+}));
+
+const db = await import("../../app/models");
+const authFunction = jest.fn().mockImplementation((req, res, next) => next());
+const authenticate = jest.mock(
+  "../../app/authorization/authorization.js",
+  () => ({
+    authenticate: authFunction,
+  })
+);
+
+let app;
+
+beforeAll(async () => {
+  app = (await import("../../server.js")).default;
+});
+
+var testTutorial = {
+  title: "Automated Testing Tutorial",
+  description:
+    "This tutorial shows an example test suite of a NodeJS backend",
+  published: false,
+  userId: 1,
+};
+
 describe("tutorial controller", () => {
-  const mockFindAllFunction = jest.fn().mockResolvedValue(Promise.resolve([]));
-  const mockFindByPkFunction = jest.fn().mockResolvedValue(Promise.resolve([]));
-  jest.mock("../../app/models", () => ({
-    sequelize: {
-      sync: jest.fn(),
-    },
-    Sequelize: {
-      Op: {
-        like: jest.fn().mockImplementation(() => true),
-      },
-    },
-    tutorial: {
-      findAll: mockFindAllFunction,
-      findByPk: mockFindByPkFunction,
-    },
-  }));
-  const db = require("../../app/models");
-  const authFunction = jest.fn().mockImplementation((req, res, next) => next());
-  const authenticate = jest.mock(
-    "../../app/authorization/authorization.js",
-    () => ({
-      authenticate: authFunction,
-    })
-  );
-
-  const app = require("../../server.js");
-  const request = require("supertest");
-
-  var testTutorial = {
-    title: "Automated Testing Tutorial",
-    description:
-      "This tutorial shows an example test suite of a NodeJS backend",
-    published: false,
-    userId: 1,
-  };
-
   describe("get tutorials list", () => {
     it("authenticates the user", async () => {
       mockFindAllFunction.mockResolvedValue(Promise.resolve([]));

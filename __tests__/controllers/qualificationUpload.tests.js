@@ -1,9 +1,9 @@
-const request = require("supertest");
-const db = require("../../app/models/index.js");
-const app = require("../../server.js");
-const { setupTestData } = require("../helpers/testData.js");
-const path = require("path");
-const fs = require("fs");
+import request from "supertest";
+import db from "../../app/models/index.js";
+import app from "../../server.js";
+import { setupTestData } from "../helpers/testData.js";
+import path from "path";
+import fs from "fs";
 
 describe("Qualification Upload Tests", () => {
   let testData;
