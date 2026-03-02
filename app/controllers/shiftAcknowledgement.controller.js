@@ -71,7 +71,7 @@ exports.findAll = (req, res) => {
       {
         model: Shift,
         as: 'shift',
-        attributes: ['id', 'shiftDate', 'startTime', 'endTime', 'departmentId']
+        attributes: ['shift_id', 'shift_date', 'start_time', 'end_time', 'department_id']
       },
       {
         model: User,
@@ -103,7 +103,7 @@ exports.findAllUnacknowledged = (req, res) => {
       {
         model: Shift,
         as: 'shift',
-        attributes: ['id', 'shiftDate', 'startTime', 'endTime', 'departmentId']
+        attributes: ['shift_id', 'shift_date', 'start_time', 'end_time', 'department_id']
       },
       {
         model: User,
@@ -137,7 +137,7 @@ exports.findAllForUser = (req, res) => {
       {
         model: Shift,
         as: 'shift',
-        attributes: ['id', 'shiftDate', 'startTime', 'endTime', 'departmentId']
+        attributes: ['shift_id', 'shift_date', 'start_time', 'end_time', 'department_id']
       }
     ],
     order: [['createdAt', 'DESC']]
@@ -193,7 +193,7 @@ exports.findOne = (req, res) => {
       {
         model: Shift,
         as: 'shift',
-        attributes: ['id', 'shiftDate', 'startTime', 'endTime', 'departmentId']
+        attributes: ['shift_id', 'shift_date', 'start_time', 'end_time', 'department_id']
       },
       {
         model: User,
