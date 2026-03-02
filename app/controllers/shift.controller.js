@@ -879,3 +879,145 @@ export const previewShifts = async (req, res) => {
     });
   }
 };
+
+// Assign user to shift with qualification validation
+export const assignUserToShift = async (req, res) => {
+  try {
+    const { shiftId } = req.params;
+    const { user_id } = req.body;
+
+    // Validate request
+    if (!user_id) {
+      return res.status(400).send({
+        message: "Missing required field: user_id"
+      });
+    }
+
+    // Find the shift
+    const shift = await Shift.findByPk(shiftId, {
+      include: [
+        { model: db.position, as: 'position' }
+      ]
+    });
+
+    if (!shift) {
+      return res.status(404).send({
+        message: "Shift not found."
+      });
+    }
+
+    // Verify the user exists and is a student
+    const user = await User.findByPk(user_id);
+    if (!user) {
+      return res.status(404).send({
+        message: "User not found."
+      });
+    }
+
+    if (user.role !== 'student') {
+      return res.status(400).send({
+        message: "Only students can be assigned to shifts."
+      });
+    }
+
+    // Get required qualifications for the position
+    const requiredQualifications = await PositionQualification.findAll({
+      where: { position_id: shift.position_id },
+      include: [
+        {
+          model: Qualification,
+          as: 'qualification',
+          attributes: ['qualification_id', 'qualification_name']
+        }
+      ]
+    });
+
+    if (requiredQualifications.length === 0) {
+      // No qualifications required, assign directly
+      const updatedShift = await Shift.update(
+        { assigned_user_id: user_id },
+        { 
+          where: { shift_id: shiftId },
+          returning: true
+        }
+      );
+
+      res.status(200).send({
+        message: "User assigned to shift successfully.",
+        shift: updatedShift[0]
+      });
+      return;
+    }
+
+    // Get user's qualifications
+    const userQualifications = await UserQualification.findAll({
+      where: { user_id: user_id },
+      include: [
+        {
+          model: Qualification,
+          as: 'qualification',
+          attributes: ['qualification_id', 'qualification_name']
+        }
+      ]
+    });
+
+    // Check qualification requirements
+    const missingQualifications = [];
+    const notApprovedQualifications = [];
+
+    for (const requiredQual of requiredQualifications) {
+      const userQual = userQualifications.find(uq => uq.qualification_id === requiredQual.qualification_id);
+      
+      if (!userQual) {
+        missingQualifications.push({
+          qualification_id: requiredQual.qualification.qualification_id,
+          qualification_name: requiredQual.qualification.qualification_name
+        });
+      } else if (userQual.approval_status !== 'APPROVED') {
+        notApprovedQualifications.push({
+          qualification_id: requiredQual.qualification.qualification_id,
+          qualification_name: requiredQual.qualification.qualification_name,
+          approval_status: userQual.approval_status
+        });
+      }
+    }
+
+    if (missingQualifications.length > 0 || notApprovedQualifications.length > 0) {
+      let message = 'Student cannot be assigned to this shift.';
+      
+      if (missingQualifications.length > 0 && notApprovedQualifications.length > 0) {
+        message = `Missing ${missingQualifications.length} qualification(s) and ${notApprovedQualifications.length} qualification(s) not approved.`;
+      } else if (missingQualifications.length > 0) {
+        message = `Missing ${missingQualifications.length} required qualification(s).`;
+      } else {
+        message = `${notApprovedQualifications.length} qualification(s) not approved.`;
+      }
+
+      return res.status(400).send({
+        message,
+        missingQualifications,
+        notApprovedQualifications
+      });
+    }
+
+    // All qualifications met, assign user to shift
+    const updatedShift = await Shift.update(
+      { assigned_user_id: user_id },
+      { 
+        where: { shift_id: shiftId },
+        returning: true
+      }
+    );
+
+    res.status(200).send({
+      message: "User assigned to shift successfully.",
+      shift: updatedShift[0]
+    });
+
+  } catch (error) {
+    console.error('Error assigning user to shift:', error);
+    res.status(500).send({
+      message: "Error assigning user to shift."
+    });
+  }
+};

@@ -18,7 +18,6 @@ import Department from "./department.model.js";
 import Position from "./position.model.js";
 import Role from "./role.model.js";
 import ScheduleTemplate from "./schedule_template.model.js";
-
 import Availability from "./availability.model.js";
 import ScheduleGapAlert from "./scheduleGapAlert.model.js";
 import ShiftAcknowledgement from "./shiftAcknowledgement.model.js";
@@ -50,7 +49,6 @@ db.department = Department;
 db.position = Position;
 db.role = Role;
 db.scheduleTemplate = ScheduleTemplate;
-
 db.availability = Availability;
 db.scheduleGapAlert = ScheduleGapAlert;
 db.shiftAcknowledgement = ShiftAcknowledgement;

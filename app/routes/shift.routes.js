@@ -10,13 +10,13 @@ const router = express.Router();
 router.post("/", [verifyToken, requireManager, requireDepartmentManager], shiftController.createShift);
 
 // Retrieve all Shifts with optional filters
-router.get("/", [verifyToken], shiftController.listShifts);
+router.get("/", [authenticate], shiftController.listShifts);
 
 // Retrieve shift audit trail
 router.get("/:id/audit", [verifyToken, requireManager, requireDepartmentManager], shiftController.getShiftAuditTrail);
 
 // Retrieve a single Shift with id
-router.get("/:id", [verifyToken], shiftController.getShiftById);
+router.get("/:id", [authenticate], shiftController.getShiftById);
 
 // Update a Shift with id
 router.put("/:id", [verifyToken, requireManager, requireDepartmentManager], shiftController.updateShift);
