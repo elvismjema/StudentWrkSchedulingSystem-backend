@@ -46,6 +46,31 @@ const UserQualification = SequelizeInstance.define(
       allowNull: true,
       field: "document_path"
     },
+    evidence_filename: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: "evidence_filename"
+    },
+    evidence_mime_type: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: "evidence_mime_type"
+    },
+    evidence_url: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: "evidence_url"
+    },
+    evidence_type: {
+      type: DataTypes.ENUM('RESUME', 'CERTIFICATE', 'OTHER'),
+      allowNull: true,
+      field: "evidence_type"
+    },
+    submitted_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: "submitted_at"
+    },
     created_at: {
       type: DataTypes.DATE,
       allowNull: false,

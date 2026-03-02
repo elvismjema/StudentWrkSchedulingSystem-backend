@@ -25,4 +25,8 @@ router.get("/:id", [verifyToken], getQualificationById);
 router.put("/:id", [verifyToken], updateQualification);
 router.delete("/:id", [verifyToken], deleteQualification);
 
+// Upload qualification evidence for current user
+// Student-only - POST /api/qualifications/me/upload
+router.post("/qualifications/me/upload", [authenticate], upload.single('file'), qualificationController.uploadQualificationEvidence);
+
 export default router;
