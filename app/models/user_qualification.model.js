@@ -34,6 +34,23 @@ const UserQualification = SequelizeInstance.define(
       allowNull: false,
       defaultValue: Sequelize.NOW,
     },
+    approval_status: {
+      type: Sequelize.ENUM("pending", "approved", "rejected"),
+      allowNull: false,
+      defaultValue: "pending",
+    },
+    approved_by: {
+      type: Sequelize.INTEGER,
+      allowNull: true,
+    },
+    approved_at: {
+      type: Sequelize.DATE,
+      allowNull: true,
+    },
+    rejection_reason: {
+      type: Sequelize.TEXT,
+      allowNull: true,
+    },
     notes: {
       type: Sequelize.TEXT,
       allowNull: true,
