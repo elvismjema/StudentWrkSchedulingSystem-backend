@@ -1,6 +1,7 @@
 import db from "../models/index.js";
 import fs from "fs/promises";
 import path from "path";
+import { Op } from "sequelize";
 
 const Qualification = db.qualification;
 const User = db.user;
@@ -13,6 +14,222 @@ const ALLOWED_MIME_TYPES = new Set([
   "image/jpeg",
   "image/jpg",
 ]);
+
+const formatUserQualification = (userQualification) => ({
+  user_qualification_id: userQualification.id,
+  qualification_id: userQualification.qualification_id,
+  qualification_name: userQualification?.qualification?.qualification_name || null,
+  description: userQualification?.qualification?.description || null,
+  requires_document: Boolean(userQualification?.qualification?.requires_document),
+  approval_status: String(userQualification.approval_status || "pending").toLowerCase(),
+  document_name: userQualification.file_name,
+  document_path: userQualification.file_path,
+  mime_type: userQualification.mime_type,
+  uploaded_at: userQualification.uploaded_at,
+  approved_at: userQualification.approved_at,
+  rejection_reason: userQualification.rejection_reason,
+  notes: userQualification.notes,
+});
+
+export const listStudentsWithQualifications = async (req, res) => {
+  try {
+    const { qualificationId, status } = req.query;
+    const where = {};
+
+    if (qualificationId) {
+      where.qualification_id = Number(qualificationId);
+    }
+
+    if (status) {
+      const normalizedStatus = String(status).toLowerCase();
+      if (!["pending", "approved", "rejected"].includes(normalizedStatus)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid status filter. Allowed values: pending, approved, rejected",
+        });
+      }
+      where.approval_status = normalizedStatus;
+    }
+
+    const records = await UserQualification.findAll({
+      where,
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "fName", "lName", "email"],
+        },
+        {
+          model: Qualification,
+          as: "qualification",
+          attributes: ["qualification_id", "qualification_name", "requires_document"],
+        },
+      ],
+      order: [["uploaded_at", "DESC"]],
+    });
+
+    const studentsById = new Map();
+
+    records.forEach((record) => {
+      if (!record.user) return;
+
+      const userId = Number(record.user_id);
+      if (!studentsById.has(userId)) {
+        studentsById.set(userId, {
+          user_id: userId,
+          first_name: record.user.fName,
+          last_name: record.user.lName,
+          email: record.user.email,
+          qualifications: [],
+        });
+      }
+
+      studentsById.get(userId).qualifications.push({
+        qualification_id: record.qualification_id,
+        qualification_name: record?.qualification?.qualification_name || null,
+        requires_document: Boolean(record?.qualification?.requires_document),
+        approval_status: String(record.approval_status || "pending").toLowerCase(),
+      });
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: Array.from(studentsById.values()),
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch students with qualifications",
+      error: error.message,
+    });
+  }
+};
+
+export const getStudentQualifications = async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid userId",
+      });
+    }
+
+    const user = await User.findByPk(userId, {
+      attributes: ["id", "fName", "lName", "email"],
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "Student not found",
+      });
+    }
+
+    const qualifications = await UserQualification.findAll({
+      where: {
+        user_id: userId,
+        approval_status: {
+          [Op.in]: ["pending", "approved", "rejected"],
+        },
+      },
+      include: [
+        {
+          model: Qualification,
+          as: "qualification",
+          attributes: ["qualification_id", "qualification_name", "description", "requires_document"],
+        },
+      ],
+      order: [["uploaded_at", "DESC"]],
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: qualifications.map(formatUserQualification),
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch student qualifications",
+      error: error.message,
+    });
+  }
+};
+
+export const reviewQualificationDocument = async (req, res) => {
+  try {
+    const qualificationRecordId = Number(req.params.id);
+    const statusRaw = String(req.body.approval_status || "").toLowerCase();
+    const rejectionReason = String(req.body.rejection_reason || "").trim();
+
+    if (!qualificationRecordId) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid user qualification id",
+      });
+    }
+
+    if (!["approved", "rejected"].includes(statusRaw)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid approval_status. Allowed values: approved, rejected",
+      });
+    }
+
+    if (statusRaw === "rejected" && !rejectionReason) {
+      return res.status(400).json({
+        success: false,
+        message: "A rejection reason is required when rejecting a qualification",
+      });
+    }
+
+    const qualificationRecord = await UserQualification.findByPk(qualificationRecordId, {
+      include: [
+        {
+          model: Qualification,
+          as: "qualification",
+          attributes: ["qualification_id", "qualification_name", "description", "requires_document"],
+        },
+      ],
+    });
+
+    if (!qualificationRecord) {
+      return res.status(404).json({
+        success: false,
+        message: "User qualification record not found",
+      });
+    }
+
+    qualificationRecord.approval_status = statusRaw;
+
+    if (statusRaw === "approved") {
+      qualificationRecord.approved_by = req.auth?.userId || null;
+      qualificationRecord.approved_at = new Date();
+      qualificationRecord.rejection_reason = null;
+    } else {
+      qualificationRecord.approved_by = null;
+      qualificationRecord.approved_at = null;
+      qualificationRecord.rejection_reason = rejectionReason;
+    }
+
+    await qualificationRecord.save();
+
+    return res.status(200).json({
+      success: true,
+      message:
+        statusRaw === "approved"
+          ? "Qualification document approved"
+          : "Qualification document rejected",
+      data: formatUserQualification(qualificationRecord),
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to review qualification document",
+      error: error.message,
+    });
+  }
+};
 
 // Create and save a new qualification
 export const createQualification = async (req, res) => {
@@ -260,6 +477,10 @@ export const uploadQualificationDocument = async (req, res) => {
       existingLink.mime_type = mime_type || null;
       existingLink.notes = notes || null;
       existingLink.uploaded_at = new Date();
+      existingLink.approval_status = "pending";
+      existingLink.approved_at = null;
+      existingLink.approved_by = null;
+      existingLink.rejection_reason = null;
       await existingLink.save();
 
       return res.status(200).json({
@@ -276,6 +497,10 @@ export const uploadQualificationDocument = async (req, res) => {
       file_path: relativePath,
       mime_type: mime_type || null,
       notes: notes || null,
+      approval_status: "pending",
+      approved_by: null,
+      approved_at: null,
+      rejection_reason: null,
     });
 
     return res.status(201).json({

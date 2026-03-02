@@ -4,6 +4,8 @@ const mockFindByPk = jest.fn();
 const mockUserFindByPk = jest.fn();
 const mockUserQualificationCreate = jest.fn();
 const mockUserQualificationFindOne = jest.fn();
+const mockUserQualificationFindAll = jest.fn();
+const mockUserQualificationFindByPk = jest.fn();
 const mockMkdir = jest.fn();
 const mockWriteFile = jest.fn();
 const mockUnlink = jest.fn();
@@ -31,6 +33,8 @@ jest.mock("../../app/models/index.js", () => ({
     userQualification: {
       create: mockUserQualificationCreate,
       findOne: mockUserQualificationFindOne,
+      findAll: mockUserQualificationFindAll,
+      findByPk: mockUserQualificationFindByPk,
     },
   },
 }));
@@ -41,6 +45,9 @@ const {
   updateQualification,
   deleteQualification,
   uploadQualificationDocument,
+  listStudentsWithQualifications,
+  getStudentQualifications,
+  reviewQualificationDocument,
 } = require("../../app/controllers/qualification.controller.js");
 
 const mockReq = (body = {}, params = {}, query = {}) => ({
@@ -66,6 +73,7 @@ const testQualification = {
 beforeEach(() => {
   jest.clearAllMocks();
   mockUserQualificationFindOne.mockResolvedValue(null);
+  mockUserQualificationFindAll.mockResolvedValue([]);
 });
 
 describe("create qualification", () => {
@@ -235,6 +243,146 @@ describe("update qualification", () => {
     await updateQualification(req, res);
 
     expect(res.status).toHaveBeenCalledWith(500);
+  });
+});
+
+describe("list students with qualifications", () => {
+  it("returns grouped students with qualification summaries", async () => {
+    mockUserQualificationFindAll.mockResolvedValue([
+      {
+        user_id: 10,
+        approval_status: "pending",
+        user: { id: 10, fName: "Ada", lName: "Lovelace", email: "ada@oc.edu" },
+        qualification: { qualification_id: 1, qualification_name: "CPR", requires_document: true },
+        qualification_id: 1,
+      },
+      {
+        user_id: 10,
+        approval_status: "approved",
+        user: { id: 10, fName: "Ada", lName: "Lovelace", email: "ada@oc.edu" },
+        qualification: { qualification_id: 2, qualification_name: "First Aid", requires_document: true },
+        qualification_id: 2,
+      },
+    ]);
+
+    const req = mockReq({}, {}, {});
+    const res = mockRes();
+
+    await listStudentsWithQualifications(req, res);
+
+    expect(mockUserQualificationFindAll).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: true,
+        data: [
+          expect.objectContaining({
+            user_id: 10,
+            first_name: "Ada",
+            qualifications: expect.arrayContaining([
+              expect.objectContaining({ qualification_id: 1, approval_status: "pending" }),
+              expect.objectContaining({ qualification_id: 2, approval_status: "approved" }),
+            ]),
+          }),
+        ],
+      }),
+    );
+  });
+});
+
+describe("get student qualifications", () => {
+  it("returns mapped qualification records for a student", async () => {
+    mockUserFindByPk.mockResolvedValue({ id: 10, fName: "Ada", lName: "Lovelace" });
+    mockUserQualificationFindAll.mockResolvedValue([
+      {
+        id: 22,
+        qualification_id: 1,
+        file_name: "cpr.pdf",
+        file_path: "uploads/qualifications/cpr.pdf",
+        mime_type: "application/pdf",
+        uploaded_at: new Date("2026-01-01T00:00:00.000Z"),
+        approval_status: "pending",
+        approved_at: null,
+        rejection_reason: null,
+        notes: null,
+        qualification: {
+          qualification_id: 1,
+          qualification_name: "CPR",
+          description: "CPR cert",
+          requires_document: true,
+        },
+      },
+    ]);
+
+    const req = mockReq({}, { userId: "10" });
+    const res = mockRes();
+
+    await getStudentQualifications(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: true,
+        data: [
+          expect.objectContaining({
+            user_qualification_id: 22,
+            qualification_name: "CPR",
+            approval_status: "pending",
+          }),
+        ],
+      }),
+    );
+  });
+});
+
+describe("review qualification document", () => {
+  it("updates status to approved", async () => {
+    const mockSave = jest.fn().mockResolvedValue(true);
+    mockUserQualificationFindByPk.mockResolvedValue({
+      id: 12,
+      qualification_id: 1,
+      approval_status: "pending",
+      approved_by: null,
+      approved_at: null,
+      rejection_reason: null,
+      file_name: "doc.pdf",
+      file_path: "uploads/qualifications/doc.pdf",
+      mime_type: "application/pdf",
+      uploaded_at: new Date("2026-01-01T00:00:00.000Z"),
+      notes: null,
+      qualification: {
+        qualification_id: 1,
+        qualification_name: "CPR",
+        description: "CPR cert",
+        requires_document: true,
+      },
+      save: mockSave,
+    });
+
+    const req = mockReq({ approval_status: "approved" }, { id: "12" });
+    req.auth = { userId: 5 };
+    const res = mockRes();
+
+    await reviewQualificationDocument(req, res);
+
+    expect(mockSave).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({ approval_status: "approved" }),
+      }),
+    );
+  });
+
+  it("requires rejection reason when status is rejected", async () => {
+    const req = mockReq({ approval_status: "rejected" }, { id: "12" });
+    const res = mockRes();
+
+    await reviewQualificationDocument(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(mockUserQualificationFindByPk).not.toHaveBeenCalled();
   });
 });
 
