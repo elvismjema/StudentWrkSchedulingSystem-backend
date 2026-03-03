@@ -7,24 +7,27 @@ on:
 jobs:
   backend-ci:
     runs-on: ubuntu-latest
-    
+
     strategy:
       matrix:
         node-version: [24.x]
-    
+
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+          cache: "npm"
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        working-directory: StudentWrkSchedulingSystem-backend
         run: npm ci
 
       - name: Verify app entry
-        working-directory: StudentWrkSchedulingSystem-backend
         run: test -f server.js
+
+      - name: Run backend smoke checks
+        run: npm run ci:smoke
