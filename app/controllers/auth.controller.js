@@ -204,12 +204,6 @@ exports.login = async (req, res) => {
     });
   }
 
-  try {
-    assignedRole = await resolveHighestRoleForUser(user.id, email);
-  } catch (err) {
-    logger.error(`Error determining role for user ${user.id}: ${err.message}`);
-  }
-
   // Auto-fulfill any pending (pre-provisioned) role assignments for this email
   try {
     const pendingAssignments = await PendingAssignment.findAll({
@@ -260,14 +254,16 @@ exports.login = async (req, res) => {
       }
 
       // Re-resolve role after new assignments are activated
-      try {
-        assignedRole = await resolveHighestRoleForUser(user.id, email);
-      } catch (err) {
-        logger.error(`Error re-resolving role after pending fulfillment for ${user.id}: ${err.message}`);
-      }
+      assignedRole = await resolveHighestRoleForUser(user.id, email);
     }
   } catch (err) {
     logger.error(`Error checking pending assignments for ${email}: ${err.message}`);
+  }
+
+  try {
+    assignedRole = await resolveHighestRoleForUser(user.id, email);
+  } catch (err) {
+    logger.error(`Error determining role for user ${user.id}: ${err.message}`);
   }
 
   if (user.id !== undefined) {

@@ -7,23 +7,24 @@ const Department = db.department;
 const Role = db.role;
 const Position = db.position;
 const PendingAssignment = db.pendingAssignment;
-const Op = db.Sequelize.Op;
 
 const exports = {};
 
-// ─── Users ───────────────────────────────────────────────────────────────────
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 
-/**
- * Admin: Get all users with their department role memberships.
- * Includes inactive users so the admin has full visibility.
- */
+// Admin: list all users with active department memberships/roles
 exports.listAllUsers = async (req, res) => {
   try {
+    const activeOnly = String(req.query.activeOnly || "").toLowerCase() === "true";
+    const userWhere = activeOnly ? { is_active: true } : undefined;
+
     const users = await User.findAll({
+      where: userWhere,
       include: [
         {
           model: UserDepartment,
           as: "userDepartments",
+          where: { is_active: true },
           required: false,
           include: [
             {
@@ -44,10 +45,7 @@ exports.listAllUsers = async (req, res) => {
           ],
         },
       ],
-      order: [
-        ["lName", "ASC"],
-        ["fName", "ASC"],
-      ],
+      order: [["lName", "ASC"], ["fName", "ASC"]],
     });
 
     return res.status(200).json({
@@ -64,14 +62,20 @@ exports.listAllUsers = async (req, res) => {
   }
 };
 
-/**
- * Admin: Hard-delete a user entirely from the database.
- * This removes them from all tables that cascade on user delete.
- */
-exports.deleteUser = async (req, res) => {
-  const id = Number(req.params.id);
+// Backward-compatible alias
+exports.getAllUsers = exports.listAllUsers;
 
-  // Protect against accidental self-deletion
+// Admin: hard-delete user
+exports.deleteUser = async (req, res) => {
+  const id = Number(req.params.id ?? req.params.userId);
+
+  if (!id) {
+    return res.status(400).json({
+      success: false,
+      message: "Valid user id is required.",
+    });
+  }
+
   if (req.auth?.userId && Number(req.auth.userId) === id) {
     return res.status(400).json({
       success: false,
@@ -88,13 +92,10 @@ exports.deleteUser = async (req, res) => {
       });
     }
 
-    const email = user.email;
     const name = `${user.fName} ${user.lName}`;
-
     await user.destroy();
 
-    logger.info(`Admin deleted user: id=${id} email=${email} name=${name}`);
-
+    logger.info(`Admin deleted user id=${id} email=${user.email}`);
     return res.status(200).json({
       success: true,
       message: `User "${name}" has been permanently removed from the system.`,
@@ -109,11 +110,7 @@ exports.deleteUser = async (req, res) => {
   }
 };
 
-// ─── Pending Assignments (pre-provisioning) ───────────────────────────────────
-
-/**
- * Admin: List all pending (unfulfilled) role assignments.
- */
+// Admin: list pending role assignments
 exports.listPendingAssignments = async (req, res) => {
   try {
     const assignments = await PendingAssignment.findAll({
@@ -159,111 +156,150 @@ exports.listPendingAssignments = async (req, res) => {
   }
 };
 
-/**
- * Admin: Create a pre-provisioned role assignment by email.
- * When the target email logs in via Google it will be auto-activated.
- */
-exports.createPendingAssignment = async (req, res) => {
-  const { email, department_id, role_id, position_id } = req.body;
+// Backward-compatible alias
+exports.getPendingAssignments = exports.listPendingAssignments;
 
-  if (!email || !department_id || !role_id) {
+// Admin: pre-provision role assignment by email
+exports.createPendingAssignment = async (req, res) => {
+  const normalizedEmail = normalizeEmail(req.body?.email);
+  const departmentId = Number(req.body?.department_id);
+  const roleId = Number(req.body?.role_id);
+  const rawPositionId = req.body?.position_id;
+  const positionId =
+    rawPositionId === null || rawPositionId === undefined || rawPositionId === ""
+      ? null
+      : Number(rawPositionId);
+
+  if (!normalizedEmail || !departmentId || !roleId) {
     return res.status(400).json({
       success: false,
       message: "email, department_id, and role_id are required.",
     });
   }
 
-  const normalizedEmail = String(email).toLowerCase().trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid email format.",
+    });
+  }
 
   try {
-    // Verify the department and role exist
     const [department, role] = await Promise.all([
-      Department.findByPk(department_id),
-      Role.findByPk(role_id),
+      Department.findByPk(departmentId),
+      Role.findByPk(roleId),
     ]);
 
     if (!department) {
       return res.status(404).json({ success: false, message: "Department not found." });
     }
+
     if (!role) {
       return res.status(404).json({ success: false, message: "Role not found." });
     }
 
-    // If the user already exists in the DB, assign the role directly
+    if (Number(role.department_id) !== departmentId) {
+      return res.status(400).json({
+        success: false,
+        message: "Selected role does not belong to this department.",
+      });
+    }
+
+    if (positionId) {
+      const position = await Position.findByPk(positionId);
+      if (!position || Number(position.department_id) !== departmentId) {
+        return res.status(400).json({
+          success: false,
+          message: "Selected position does not belong to this department.",
+        });
+      }
+    }
+
+    // If user already exists, apply immediately
     const existingUser = await User.findOne({ where: { email: normalizedEmail } });
     if (existingUser) {
-      // Check if already has this role in this department
-      const existing = await UserDepartment.findOne({
+      const existingMembership = await UserDepartment.findOne({
         where: {
           user_id: existingUser.id,
-          department_id,
+          department_id: departmentId,
           is_active: true,
         },
       });
 
-      if (existing) {
-        // Update existing membership's role
-        existing.role_id = role_id;
-        existing.position_id = position_id || existing.position_id;
-        await existing.save();
+      if (existingMembership) {
+        existingMembership.role_id = roleId;
+        existingMembership.position_id = positionId;
+        await existingMembership.save();
       } else {
-        // Create new membership
         await UserDepartment.create({
           user_id: existingUser.id,
-          department_id,
-          role_id,
-          position_id: position_id || null,
+          department_id: departmentId,
+          role_id: roleId,
+          position_id: positionId,
           is_active: true,
           assigned_at: new Date(),
         });
       }
 
-      logger.info(
-        `Admin directly assigned role for existing user: email=${normalizedEmail} dept=${department_id} role=${role_id}`
-      );
+      // Remove stale pending records for same email + department
+      await PendingAssignment.destroy({
+        where: {
+          email: normalizedEmail,
+          department_id: departmentId,
+          is_fulfilled: false,
+        },
+      });
 
+      logger.info(
+        `Admin directly assigned role for existing user email=${normalizedEmail} dept=${departmentId} role=${roleId}`,
+      );
       return res.status(201).json({
         success: true,
-        message: `Role assigned directly to existing user "${existingUser.fName} ${existingUser.lName}".`,
         fulfilled_immediately: true,
+        message: `Role assigned directly to existing user "${existingUser.fName} ${existingUser.lName}".`,
       });
     }
 
-    // Check if a pending assignment already exists for this email + dept + role
+    // Upsert pending assignment for this email + department
     const existingPending = await PendingAssignment.findOne({
       where: {
         email: normalizedEmail,
-        department_id,
-        role_id,
+        department_id: departmentId,
         is_fulfilled: false,
       },
     });
 
     if (existingPending) {
-      return res.status(409).json({
-        success: false,
-        message: "A pending assignment for this email, department, and role already exists.",
+      existingPending.role_id = roleId;
+      existingPending.position_id = positionId;
+      existingPending.created_by = req.auth?.userId || null;
+      await existingPending.save();
+
+      return res.status(200).json({
+        success: true,
+        fulfilled_immediately: false,
+        message: "Pending assignment updated.",
+        data: existingPending,
       });
     }
 
     const assignment = await PendingAssignment.create({
       email: normalizedEmail,
-      department_id,
-      role_id,
-      position_id: position_id || null,
+      department_id: departmentId,
+      role_id: roleId,
+      position_id: positionId,
       created_by: req.auth?.userId || null,
       is_fulfilled: false,
       created_at: new Date(),
     });
 
     logger.info(
-      `Admin created pending assignment: email=${normalizedEmail} dept=${department_id} role=${role_id}`
+      `Admin created pending assignment email=${normalizedEmail} dept=${departmentId} role=${roleId}`,
     );
-
     return res.status(201).json({
       success: true,
-      message: `Pending assignment created. The role will activate when ${normalizedEmail} logs in.`,
       fulfilled_immediately: false,
+      message: `Pending assignment created. The role will activate when ${normalizedEmail} logs in.`,
       data: assignment,
     });
   } catch (err) {
@@ -276,11 +312,16 @@ exports.createPendingAssignment = async (req, res) => {
   }
 };
 
-/**
- * Admin: Delete / cancel a pending assignment.
- */
+// Admin: delete pending assignment
 exports.deletePendingAssignment = async (req, res) => {
   const id = Number(req.params.id);
+
+  if (!id) {
+    return res.status(400).json({
+      success: false,
+      message: "Valid pending assignment id is required.",
+    });
+  }
 
   try {
     const assignment = await PendingAssignment.findByPk(id);
@@ -292,7 +333,6 @@ exports.deletePendingAssignment = async (req, res) => {
     }
 
     await assignment.destroy();
-
     return res.status(200).json({
       success: true,
       message: "Pending assignment cancelled.",
@@ -307,13 +347,16 @@ exports.deletePendingAssignment = async (req, res) => {
   }
 };
 
-// ─── Department Members ───────────────────────────────────────────────────────
-
-/**
- * Admin: Get all members (active user-departments) for a given department.
- */
+// Admin: get members for a department
 exports.getDepartmentMembers = async (req, res) => {
-  const departmentId = Number(req.params.id);
+  const departmentId = Number(req.params.id ?? req.params.departmentId);
+
+  if (!departmentId) {
+    return res.status(400).json({
+      success: false,
+      message: "Valid department id is required.",
+    });
+  }
 
   try {
     const department = await Department.findByPk(departmentId);
@@ -334,6 +377,7 @@ exports.getDepartmentMembers = async (req, res) => {
           model: User,
           as: "user",
           attributes: ["id", "fName", "lName", "email", "is_active"],
+          required: true,
         },
         {
           model: Role,

@@ -532,10 +532,20 @@ db.userDepartment.belongsTo(db.role, {
 });
 
 // PendingAssignment relationships
+db.department.hasMany(db.pendingAssignment, {
+  foreignKey: "department_id",
+  as: "pendingAssignments",
+});
+
 db.pendingAssignment.belongsTo(db.department, {
   foreignKey: "department_id",
   as: "department",
   onDelete: "CASCADE",
+});
+
+db.role.hasMany(db.pendingAssignment, {
+  foreignKey: "role_id",
+  as: "pendingAssignments",
 });
 
 db.pendingAssignment.belongsTo(db.role, {
@@ -544,10 +554,20 @@ db.pendingAssignment.belongsTo(db.role, {
   onDelete: "CASCADE",
 });
 
+db.position.hasMany(db.pendingAssignment, {
+  foreignKey: "position_id",
+  as: "pendingAssignments",
+});
+
 db.pendingAssignment.belongsTo(db.position, {
   foreignKey: "position_id",
   as: "position",
   onDelete: "SET NULL",
+});
+
+db.user.hasMany(db.pendingAssignment, {
+  foreignKey: "created_by",
+  as: "createdPendingAssignments",
 });
 
 db.pendingAssignment.belongsTo(db.user, {

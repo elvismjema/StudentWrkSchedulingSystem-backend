@@ -1,6 +1,7 @@
 import express from "express";
 import * as shiftController from "../controllers/shift.controller.js";
 import { verifyToken } from "../middleware/authJwt.js";
+import authenticate from "../authorization/authorization.js";
 import requireManager from "../authorization/requireManager.js";
 import requireDepartmentManager from "../authorization/requireDepartmentManager.js";
 
