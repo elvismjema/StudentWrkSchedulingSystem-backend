@@ -28,7 +28,6 @@
     "morgan": "^1.10.0",
     "multer": "^2.1.0",
     "mysql2": "^2.3.3",
-    "parser": "^0.1.4",
     "sequelize": "^6.19.0",
     "supertest": "^6.3.3",
     "winston": "^3.11.0",
