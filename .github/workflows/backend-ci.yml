@@ -34,7 +34,7 @@ jobs:
         run: npm test
 
       - name: Upload coverage reports
-        if: matrix.node-version == '18.x'
+        if: matrix.node-version == '24.x'
         uses: codecov/codecov-action@v3
         with:
           files: StudentWrkSchedulingSystem-backend/coverage/lcov.info
