@@ -2,42 +2,41 @@ name: Backend CI
 
 on:
   push:
-    branches: [ main, dev, BM_* ]
+    branches: [ main, dev, "BM_*" ]
   pull_request:
-    branches: [ main, dev, BM_* ]
+    branches: [ main, dev, "BM_*" ]
 
 jobs:
   backend:
     runs-on: ubuntu-latest
-    
+
     strategy:
       matrix:
         node-version: [18.x]
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ matrix.node-version }}
-        cache: 'npm'
-        cache-dependency-path: StudentWrkSchedulingSystem-backend
-      
-    - name: Install dependencies
-      working-directory: StudentWrkSchedulingSystem-backend
-      run: npm ci
-        
-    - name: Run tests
-      working-directory: StudentWrkSchedulingSystem-backend
-      run: npm test
-        
-    - name: Upload coverage reports
-      working-directory: StudentWrkSchedulingSystem-backend
-      if: matrix.node-version == '18.x'
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage/lcov.info
-        flags: backend
-        name: backend-coverage
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: StudentWrkSchedulingSystem-backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: StudentWrkSchedulingSystem-backend
+        run: npm ci
+
+      - name: Run tests
+        working-directory: StudentWrkSchedulingSystem-backend
+        run: npm test
+
+      - name: Upload coverage reports
+        if: matrix.node-version == '18.x'
+        uses: codecov/codecov-action@v3
+        with:
+          files: StudentWrkSchedulingSystem-backend/coverage/lcov.info
+          flags: backend
+          name: backend-coverage
