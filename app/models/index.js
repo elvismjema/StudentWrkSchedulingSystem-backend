@@ -28,6 +28,7 @@ import DepartmentHours from "./department_hours.model.js";
 import Qualification from "./qualification.model.js";
 import UserQualification from "./user_qualification.model.js";
 import UserDepartment from "./user_department.model.js";
+import PendingRoleAssignment from "./pending_role_assignment.model.js";
 
 
 const db = {};
@@ -59,6 +60,7 @@ db.departmentHours = DepartmentHours;
 db.qualification = Qualification;
 db.userQualification = UserQualification;
 db.userDepartment = UserDepartment;
+db.pendingRoleAssignment = PendingRoleAssignment;
 
 
 // foreign key for session
@@ -528,6 +530,50 @@ db.role.hasMany(db.userDepartment, {
 db.userDepartment.belongsTo(db.role, {
   foreignKey: "role_id",
   as: "role",
+  onDelete: "SET NULL",
+});
+
+db.department.hasMany(db.pendingRoleAssignment, {
+  foreignKey: "department_id",
+  as: "pendingAssignments",
+});
+
+db.pendingRoleAssignment.belongsTo(db.department, {
+  foreignKey: "department_id",
+  as: "department",
+  onDelete: "CASCADE",
+});
+
+db.role.hasMany(db.pendingRoleAssignment, {
+  foreignKey: "role_id",
+  as: "pendingAssignments",
+});
+
+db.pendingRoleAssignment.belongsTo(db.role, {
+  foreignKey: "role_id",
+  as: "role",
+  onDelete: "CASCADE",
+});
+
+db.position.hasMany(db.pendingRoleAssignment, {
+  foreignKey: "position_id",
+  as: "pendingAssignments",
+});
+
+db.pendingRoleAssignment.belongsTo(db.position, {
+  foreignKey: "position_id",
+  as: "position",
+  onDelete: "SET NULL",
+});
+
+db.user.hasMany(db.pendingRoleAssignment, {
+  foreignKey: "created_by_user_id",
+  as: "createdPendingAssignments",
+});
+
+db.pendingRoleAssignment.belongsTo(db.user, {
+  foreignKey: "created_by_user_id",
+  as: "creator",
   onDelete: "SET NULL",
 });
 

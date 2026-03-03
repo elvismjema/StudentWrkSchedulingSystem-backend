@@ -101,6 +101,54 @@ const exchangeGoogleCodeForTokens = async (code) => {
   });
 };
 
+const applyPendingAssignmentsForEmail = async (userId, email) => {
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  if (!normalizedEmail || !db.pendingRoleAssignment) {
+    return;
+  }
+
+  const pendingAssignments = await db.pendingRoleAssignment.findAll({
+    where: {
+      email: normalizedEmail,
+    },
+  });
+
+  if (!pendingAssignments.length) {
+    return;
+  }
+
+  for (const assignment of pendingAssignments) {
+    const existingMembership = await db.userDepartment.findOne({
+      where: {
+        user_id: userId,
+        department_id: assignment.department_id,
+        is_active: true,
+      },
+    });
+
+    if (existingMembership) {
+      existingMembership.role_id = assignment.role_id;
+      existingMembership.position_id = assignment.position_id;
+      await existingMembership.save();
+    } else {
+      await db.userDepartment.create({
+        user_id: userId,
+        department_id: assignment.department_id,
+        role_id: assignment.role_id,
+        position_id: assignment.position_id,
+        is_active: true,
+        assigned_at: new Date(),
+      });
+    }
+  }
+
+  await db.pendingRoleAssignment.destroy({
+    where: {
+      email: normalizedEmail,
+    },
+  });
+};
+
 exports.login = async (req, res) => {
   logger.info('Login attempt initiated');
 
@@ -203,6 +251,7 @@ exports.login = async (req, res) => {
   }
 
   try {
+    await applyPendingAssignmentsForEmail(user.id, email);
     assignedRole = await resolveHighestRoleForUser(user.id, email);
   } catch (err) {
     logger.error(`Error determining role for user ${user.id}: ${err.message}`);
