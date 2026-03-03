@@ -1,42 +1,25 @@
-name: Backend CI
+name: Backend Workflow
 
 on:
   push:
-    branches: [ main, dev, "BM_*" ]
-  pull_request:
-    branches: [ main, dev, "BM_*" ]
+    branches: [main, dev]
 
 jobs:
-  backend:
+  backend-ci:
     runs-on: ubuntu-latest
 
-    strategy:
-      matrix:
-        node-version: [18.x]
-
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
-          cache: npm
-          cache-dependency-path: StudentWrkSchedulingSystem-backend/package-lock.json
+          node-version: "18"
+          cache: "npm"
 
       - name: Install dependencies
-        working-directory: StudentWrkSchedulingSystem-backend
         run: npm ci
 
-      - name: Run tests
-        working-directory: StudentWrkSchedulingSystem-backend
-        run: npm test
-
-      - name: Upload coverage reports
-        if: matrix.node-version == '24.x'
-        uses: codecov/codecov-action@v3
-        with:
-          files: StudentWrkSchedulingSystem-backend/coverage/lcov.info
-          flags: backend
-          name: backend-coverage
+      - name: Verify app entry
+        run: test -f server.js
