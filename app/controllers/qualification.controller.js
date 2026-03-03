@@ -2,6 +2,7 @@ import db from "../models/index.js";
 import fs from "fs/promises";
 import path from "path";
 import { Op } from "sequelize";
+import multer from "multer";
 
 const Qualification = db.qualification;
 const User = db.user;

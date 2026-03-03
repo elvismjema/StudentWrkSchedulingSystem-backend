@@ -18,7 +18,6 @@ import Department from "./department.model.js";
 import Position from "./position.model.js";
 import Role from "./role.model.js";
 import ScheduleTemplate from "./schedule_template.model.js";
-
 import Availability from "./availability.model.js";
 import ScheduleGapAlert from "./scheduleGapAlert.model.js";
 import ShiftAcknowledgement from "./shiftAcknowledgement.model.js";
@@ -28,7 +27,7 @@ import DepartmentHours from "./department_hours.model.js";
 import Qualification from "./qualification.model.js";
 import UserQualification from "./user_qualification.model.js";
 import UserDepartment from "./user_department.model.js";
-import PendingRoleAssignment from "./pending_role_assignment.model.js";
+import PendingAssignment from "./pending_assignment.model.js";
 
 
 const db = {};
@@ -50,7 +49,6 @@ db.department = Department;
 db.position = Position;
 db.role = Role;
 db.scheduleTemplate = ScheduleTemplate;
-
 db.availability = Availability;
 db.scheduleGapAlert = ScheduleGapAlert;
 db.shiftAcknowledgement = ShiftAcknowledgement;
@@ -60,7 +58,7 @@ db.departmentHours = DepartmentHours;
 db.qualification = Qualification;
 db.userQualification = UserQualification;
 db.userDepartment = UserDepartment;
-db.pendingRoleAssignment = PendingRoleAssignment;
+db.pendingAssignment = PendingAssignment;
 
 
 // foreign key for session
@@ -533,46 +531,47 @@ db.userDepartment.belongsTo(db.role, {
   onDelete: "SET NULL",
 });
 
-db.department.hasMany(db.pendingRoleAssignment, {
+// PendingAssignment relationships
+db.department.hasMany(db.pendingAssignment, {
   foreignKey: "department_id",
   as: "pendingAssignments",
 });
 
-db.pendingRoleAssignment.belongsTo(db.department, {
+db.pendingAssignment.belongsTo(db.department, {
   foreignKey: "department_id",
   as: "department",
   onDelete: "CASCADE",
 });
 
-db.role.hasMany(db.pendingRoleAssignment, {
+db.role.hasMany(db.pendingAssignment, {
   foreignKey: "role_id",
   as: "pendingAssignments",
 });
 
-db.pendingRoleAssignment.belongsTo(db.role, {
+db.pendingAssignment.belongsTo(db.role, {
   foreignKey: "role_id",
   as: "role",
   onDelete: "CASCADE",
 });
 
-db.position.hasMany(db.pendingRoleAssignment, {
+db.position.hasMany(db.pendingAssignment, {
   foreignKey: "position_id",
   as: "pendingAssignments",
 });
 
-db.pendingRoleAssignment.belongsTo(db.position, {
+db.pendingAssignment.belongsTo(db.position, {
   foreignKey: "position_id",
   as: "position",
   onDelete: "SET NULL",
 });
 
-db.user.hasMany(db.pendingRoleAssignment, {
-  foreignKey: "created_by_user_id",
+db.user.hasMany(db.pendingAssignment, {
+  foreignKey: "created_by",
   as: "createdPendingAssignments",
 });
 
-db.pendingRoleAssignment.belongsTo(db.user, {
-  foreignKey: "created_by_user_id",
+db.pendingAssignment.belongsTo(db.user, {
+  foreignKey: "created_by",
   as: "creator",
   onDelete: "SET NULL",
 });

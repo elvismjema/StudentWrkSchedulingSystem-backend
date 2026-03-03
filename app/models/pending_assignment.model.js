@@ -1,8 +1,8 @@
 import { DataTypes } from "sequelize";
 import SequelizeInstance from "../config/sequelizeInstance.js";
 
-const PendingRoleAssignment = SequelizeInstance.define(
-  "PendingRoleAssignment",
+const PendingAssignment = SequelizeInstance.define(
+  "PendingAssignment",
   {
     id: {
       type: DataTypes.INTEGER,
@@ -25,18 +25,29 @@ const PendingRoleAssignment = SequelizeInstance.define(
       type: DataTypes.INTEGER,
       allowNull: true,
     },
-    created_by_user_id: {
+    created_by: {
       type: DataTypes.INTEGER,
       allowNull: true,
     },
+    is_fulfilled: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+    fulfilled_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    created_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: DataTypes.NOW,
+    },
   },
   {
-    tableName: "pending_role_assignments",
-    timestamps: true,
-    underscored: true,
-    createdAt: "created_at",
-    updatedAt: "updated_at",
-  },
+    tableName: "pending_assignments",
+    timestamps: false,
+  }
 );
 
-export default PendingRoleAssignment;
+export default PendingAssignment;

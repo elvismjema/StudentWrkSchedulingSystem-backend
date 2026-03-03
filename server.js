@@ -3,6 +3,7 @@ import routes from "./app/routes/index.js";
 import express from "express";
 import cors from "cors";
 import morgan from "morgan";
+import path from "path";
 
 import db  from "./app/models/index.js";
 import logger from "./app/config/logger.js";
@@ -33,6 +34,9 @@ app.options('*', cors(corsOptions));
 app.use(express.json());
 // parse requests of content-type - application/x-www-form-urlencoded
 app.use(express.urlencoded({ extended: true }));
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
   
 // Load the routes from the routes folder
 app.use("/workerscheduling-t2", routes); 

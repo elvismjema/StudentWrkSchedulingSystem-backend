@@ -1,6 +1,7 @@
 import express from "express";
 import * as shiftController from "../controllers/shift.controller.js";
 import { verifyToken } from "../middleware/authJwt.js";
+import authenticate from "../authorization/authorization.js";
 import requireManager from "../authorization/requireManager.js";
 import requireDepartmentManager from "../authorization/requireDepartmentManager.js";
 
@@ -10,13 +11,13 @@ const router = express.Router();
 router.post("/", [verifyToken, requireManager, requireDepartmentManager], shiftController.createShift);
 
 // Retrieve all Shifts with optional filters
-router.get("/", [verifyToken], shiftController.listShifts);
+router.get("/", [authenticate], shiftController.listShifts);
 
 // Retrieve shift audit trail
 router.get("/:id/audit", [verifyToken, requireManager, requireDepartmentManager], shiftController.getShiftAuditTrail);
 
 // Retrieve a single Shift with id
-router.get("/:id", [verifyToken], shiftController.getShiftById);
+router.get("/:id", [authenticate], shiftController.getShiftById);
 
 // Update a Shift with id
 router.put("/:id", [verifyToken, requireManager, requireDepartmentManager], shiftController.updateShift);
