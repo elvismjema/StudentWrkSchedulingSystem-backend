@@ -7,7 +7,11 @@ on:
 jobs:
   backend-ci:
     runs-on: ubuntu-latest
-
+    
+    strategy:
+      matrix:
+        node-version: [24.x]
+    
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -15,11 +19,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
-          cache: "npm"
+          node-version: ${{ matrix.node-version }}
 
       - name: Install dependencies
+        working-directory: StudentWrkSchedulingSystem-backend
         run: npm ci
 
       - name: Verify app entry
+        working-directory: StudentWrkSchedulingSystem-backend
         run: test -f server.js
