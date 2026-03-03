@@ -1,9 +1,29 @@
 import db from "../models/index.js";
+import {
+  canManageDepartment,
+  resolveHighestRoleForUser,
+} from "../authorization/roleAccess.js";
 
 const UserDepartment = db.userDepartment;
 const Department = db.department;
 
 const exports = {};
+
+const classifyRole = (role) => {
+  const roleName = String(role?.role_name || "").toLowerCase();
+  const permissionLevel = Number(role?.permission_level || 0);
+
+  if (roleName.includes("admin") || permissionLevel >= 90) return "admin";
+  if (
+    roleName.includes("manager") ||
+    roleName.includes("supervisor") ||
+    permissionLevel >= 50
+  ) {
+    return "manager";
+  }
+
+  return "student";
+};
 
 // AT-22845: Student can view list of available departments
 exports.listAvailableDepartments = async (req, res) => {
@@ -197,6 +217,24 @@ exports.assignUserRole = async (req, res) => {
   }
 
   try {
+    const actorUserId = req.auth?.userId;
+    const actorEmail = req.auth?.email;
+    const actorRole = await resolveHighestRoleForUser(actorUserId, actorEmail);
+
+    if (actorRole !== "admin") {
+      const managerCanAccessDepartment = await canManageDepartment(
+        actorUserId,
+        actorEmail,
+        department_id,
+      );
+
+      if (!managerCanAccessDepartment) {
+        return res.status(403).send({
+          message: "Forbidden! You can only manage users in your departments.",
+        });
+      }
+    }
+
     // Check if the department exists
     const department = await Department.findByPk(department_id);
     if (!department) {
@@ -210,6 +248,13 @@ exports.assignUserRole = async (req, res) => {
     if (!role) {
       return res.status(404).send({
         message: `Role with id=${role_id} not found.`,
+      });
+    }
+
+    const targetRoleClassification = classifyRole(role);
+    if (actorRole !== "admin" && targetRoleClassification !== "student") {
+      return res.status(403).send({
+        message: "Forbidden! Only admins can assign manager or admin roles.",
       });
     }
 
@@ -352,12 +397,42 @@ exports.removeUserRole = async (req, res) => {
   const udId = req.params.id;
 
   try {
+    const actorUserId = req.auth?.userId;
+    const actorEmail = req.auth?.email;
+    const actorRole = await resolveHighestRoleForUser(actorUserId, actorEmail);
+
     const membership = await UserDepartment.findByPk(udId);
 
     if (!membership) {
       return res.status(404).send({
         message: `User-Department membership with id=${udId} not found.`,
       });
+    }
+
+    const departmentId = membership.department_id;
+    if (actorRole !== "admin") {
+      const managerCanAccessDepartment = await canManageDepartment(
+        actorUserId,
+        actorEmail,
+        departmentId,
+      );
+
+      if (!managerCanAccessDepartment) {
+        return res.status(403).send({
+          message: "Forbidden! You can only manage users in your departments.",
+        });
+      }
+
+      const targetRole = membership.role_id
+        ? await db.role.findByPk(membership.role_id)
+        : null;
+      const targetRoleClassification = classifyRole(targetRole);
+
+      if (targetRoleClassification !== "student") {
+        return res.status(403).send({
+          message: "Forbidden! Only admins can remove manager or admin roles.",
+        });
+      }
     }
 
     membership.is_active = false;
