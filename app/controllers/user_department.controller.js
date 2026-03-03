@@ -208,11 +208,22 @@ exports.getAllUsersWithRoles = async (req, res) => {
 
 // Admin: Assign or update user role in a department
 exports.assignUserRole = async (req, res) => {
-  const { user_id, department_id, role_id, position_id } = req.body;
+  const userId = Number(req.body?.user_id);
+  const departmentId = Number(req.body?.department_id);
+  const roleId = Number(req.body?.role_id);
+  const positionIdRaw = req.body?.position_id;
+  const positionId =
+    positionIdRaw === null || positionIdRaw === undefined || positionIdRaw === ""
+      ? null
+      : Number(positionIdRaw);
+  const applyToAllDepartments =
+    req.body?.apply_to_all_departments === true ||
+    req.body?.applyToAllDepartments === true;
 
-  if (!user_id || !department_id || !role_id) {
+  if (!userId || !roleId || (!applyToAllDepartments && !departmentId)) {
     return res.status(400).send({
-      message: "user_id, department_id, and role_id are required.",
+      message:
+        "user_id and role_id are required. department_id is required unless apply_to_all_departments=true.",
     });
   }
 
@@ -220,12 +231,31 @@ exports.assignUserRole = async (req, res) => {
     const actorUserId = req.auth?.userId;
     const actorEmail = req.auth?.email;
     const actorRole = await resolveHighestRoleForUser(actorUserId, actorEmail);
+    const role = await db.role.findByPk(roleId);
+
+    if (!role) {
+      return res.status(404).send({
+        message: `Role with id=${roleId} not found.`,
+      });
+    }
+
+    const targetRoleClassification = classifyRole(role);
+
+    const shouldAssignAcrossAllDepartments =
+      applyToAllDepartments ||
+      (actorRole === "admin" && targetRoleClassification === "admin");
+
+    if (shouldAssignAcrossAllDepartments && actorRole !== "admin") {
+      return res.status(403).send({
+        message: "Forbidden! Only admins can assign roles across all departments.",
+      });
+    }
 
     if (actorRole !== "admin") {
       const managerCanAccessDepartment = await canManageDepartment(
         actorUserId,
         actorEmail,
-        department_id,
+        departmentId,
       );
 
       if (!managerCanAccessDepartment) {
@@ -235,23 +265,6 @@ exports.assignUserRole = async (req, res) => {
       }
     }
 
-    // Check if the department exists
-    const department = await Department.findByPk(department_id);
-    if (!department) {
-      return res.status(404).send({
-        message: `Department with id=${department_id} not found.`,
-      });
-    }
-
-    // Check if the role exists
-    const role = await db.role.findByPk(role_id);
-    if (!role) {
-      return res.status(404).send({
-        message: `Role with id=${role_id} not found.`,
-      });
-    }
-
-    const targetRoleClassification = classifyRole(role);
     if (actorRole !== "admin" && targetRoleClassification !== "student") {
       return res.status(403).send({
         message: "Forbidden! Only admins can assign manager or admin roles.",
@@ -259,26 +272,113 @@ exports.assignUserRole = async (req, res) => {
     }
 
     // Check if the user exists
-    const user = await db.user.findByPk(user_id);
+    const user = await db.user.findByPk(userId);
     if (!user) {
       return res.status(404).send({
-        message: `User with id=${user_id} not found.`,
+        message: `User with id=${userId} not found.`,
+      });
+    }
+
+    if (shouldAssignAcrossAllDepartments) {
+      const departments = await Department.findAll({
+        attributes: ["department_id", "department_name"],
+      });
+
+      if (!departments.length) {
+        return res.status(404).send({
+          message: "No departments found.",
+        });
+      }
+
+      const Op = db.Sequelize.Op;
+      const matchingRoles = await db.role.findAll({
+        where: {
+          role_name: role.role_name,
+          permission_level: role.permission_level,
+          department_id: {
+            [Op.in]: departments.map((d) => d.department_id),
+          },
+        },
+      });
+
+      const roleByDepartment = new Map(
+        matchingRoles.map((r) => [Number(r.department_id), r]),
+      );
+
+      const updatedMemberships = [];
+      const createdMemberships = [];
+      const missingRoleDepartments = [];
+
+      for (const department of departments) {
+        const targetRole = roleByDepartment.get(Number(department.department_id));
+        if (!targetRole) {
+          missingRoleDepartments.push({
+            department_id: department.department_id,
+            department_name: department.department_name,
+          });
+          continue;
+        }
+
+        let membership = await UserDepartment.findOne({
+          where: {
+            user_id: userId,
+            department_id: department.department_id,
+            is_active: true,
+          },
+        });
+
+        if (membership) {
+          membership.role_id = targetRole.role_id;
+          membership.position_id = null;
+          await membership.save();
+          updatedMemberships.push(membership.ud_id);
+        } else {
+          membership = await UserDepartment.create({
+            user_id: userId,
+            department_id: department.department_id,
+            position_id: null,
+            role_id: targetRole.role_id,
+            is_active: true,
+            assigned_at: new Date(),
+          });
+          createdMemberships.push(membership.ud_id);
+        }
+      }
+
+      return res.status(200).send({
+        message: `Role applied across departments. Updated: ${updatedMemberships.length}, Created: ${createdMemberships.length}.`,
+        data: {
+          user_id: userId,
+          role_name: role.role_name,
+          permission_level: role.permission_level,
+          updated_memberships: updatedMemberships.length,
+          created_memberships: createdMemberships.length,
+          missing_role_departments: missingRoleDepartments,
+        },
+      });
+    }
+
+    // Check if the department exists
+    const department = await Department.findByPk(departmentId);
+    if (!department) {
+      return res.status(404).send({
+        message: `Department with id=${departmentId} not found.`,
       });
     }
 
     // Check if user already has an active membership in this department
     let membership = await UserDepartment.findOne({
       where: {
-        user_id: user_id,
-        department_id: department_id,
+        user_id: userId,
+        department_id: departmentId,
         is_active: true,
       },
     });
 
     if (membership) {
       // Update existing membership
-      membership.role_id = role_id;
-      membership.position_id = position_id || membership.position_id;
+      membership.role_id = roleId;
+      membership.position_id = positionId === null ? membership.position_id : positionId;
       await membership.save();
 
       const updatedMembership = await UserDepartment.findByPk(membership.ud_id, {
@@ -308,10 +408,10 @@ exports.assignUserRole = async (req, res) => {
     } else {
       // Create new membership
       const newMembership = await UserDepartment.create({
-        user_id,
-        department_id,
-        position_id: position_id || null,
-        role_id,
+        user_id: userId,
+        department_id: departmentId,
+        position_id: positionId || null,
+        role_id: roleId,
         is_active: true,
         assigned_at: new Date(),
       });
