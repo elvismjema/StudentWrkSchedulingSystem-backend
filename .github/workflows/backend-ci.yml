@@ -18,7 +18,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Setup Node.js ${{ matrix.node-version }}
+    - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
         node-version: ${{ matrix.node-version }}
@@ -27,13 +27,11 @@ jobs:
       
     - name: Install dependencies
       working-directory: StudentWrkSchedulingSystem-backend
-      run: |
-        npm ci
+      run: npm ci
         
     - name: Run tests
       working-directory: StudentWrkSchedulingSystem-backend
-      run: |
-        npm test
+      run: npm test
         
     - name: Upload coverage reports
       working-directory: StudentWrkSchedulingSystem-backend
