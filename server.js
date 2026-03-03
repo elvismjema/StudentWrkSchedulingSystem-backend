@@ -4,9 +4,14 @@ import express, { json, urlencoded } from "express"
 import cors from "cors";
 import morgan from "morgan";
 import path from "path";
+import { fileURLToPath } from "url";
 
 import db  from "./app/models/index.js";
 import logger from "./app/config/logger.js";
+
+// Get __dirname equivalent in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 db.sequelize.sync({ alter: true })
   .then(() => {

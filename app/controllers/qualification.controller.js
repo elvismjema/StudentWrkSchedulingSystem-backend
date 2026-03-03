@@ -46,9 +46,12 @@ const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB
-  }
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
 });
+
+// Export the upload middleware
+export { upload };
 
 // Get all students with their qualifications (optional filter by qualificationId)
 export const getStudentsWithQualifications = async (req, res) => {
