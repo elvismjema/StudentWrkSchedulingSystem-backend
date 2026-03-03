@@ -4,12 +4,15 @@ import express from "express";
 import cors from "cors";
 import morgan from "morgan";
 import path from "path";
+import { fileURLToPath } from "url";
 
 import db  from "./app/models/index.js";
 import logger from "./app/config/logger.js";
 import { runSeeds } from "./app/config/seed.js";
 
 const app = express();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // HTTP request logger middleware
 app.use(morgan('combined', { stream: logger.stream }));
