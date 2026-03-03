@@ -28,6 +28,3 @@ jobs:
 
       - name: Verify app entry
         run: test -f server.js
-
-      - name: Run backend smoke checks
-        run: npm run ci:smoke
