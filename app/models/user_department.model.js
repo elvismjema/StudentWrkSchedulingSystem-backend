@@ -28,7 +28,12 @@ const UserDepartment = SequelizeInstance.define(
     is_active: {
       type: Sequelize.BOOLEAN,
       allowNull: false,
-      defaultValue: true,
+      defaultValue: false,
+    },
+    request_status: {
+      type: Sequelize.ENUM("pending", "approved", "rejected"),
+      allowNull: false,
+      defaultValue: "pending",
     },
     assigned_at: {
       type: Sequelize.DATE,

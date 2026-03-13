@@ -17,6 +17,15 @@ router.get("/user/:userId", [authenticate], userDepartment.listUserDepartments);
 // Leave a department (deactivate membership)
 router.put("/leave/:id", [authenticate], userDepartment.leaveDepar);
 
+// Manager: Get pending join requests for managed departments
+router.get("/pending", [authenticate, requireManager], userDepartment.getPendingRequests);
+
+// Manager: Approve a join request
+router.put("/approve/:id", [authenticate, requireManager], userDepartment.approveJoinRequest);
+
+// Manager: Reject a join request
+router.put("/reject/:id", [authenticate, requireManager], userDepartment.rejectJoinRequest);
+
 // Admin: Get all users with their roles
 router.get("/admin/users-with-roles", [authenticate, requireManager], userDepartment.getAllUsersWithRoles);
 
