@@ -25,6 +25,13 @@ const Position = SequelizeInstance.define(
       allowNull: true,
       field: "description"
     },
+    // Marks a position (e.g. lifeguard, front desk) as requiring high-priority gap alerts
+    is_critical: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: "is_critical"
+    },
     created_at: {
       type: DataTypes.DATE,
       allowNull: false,

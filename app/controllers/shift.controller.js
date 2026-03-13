@@ -1,12 +1,16 @@
 import db from "../models/index.js";
 import { Op } from "sequelize";
+import { sendNotification } from "../services/notificationService.js";
 
 const Shift = db.shift;
 const UserDepartment = db.userDepartment;
 const Availability = db.availability;
 const ShiftAcknowledgement = db.shiftAcknowledgement;
-const Notification = db.notification;
 const ShiftAudit = db.shiftAudit;
+const User = db.user;
+const Qualification = db.qualification;
+const UserQualification = db.userQualification;
+const PositionQualification = db.positionQualification;
 
 const SHIFT_STATUS = {
   DRAFT: "draft",
@@ -177,14 +181,13 @@ const validateAssignmentEligibility = async (
   );
 };
 
-const createShiftNotification = async (userId, title, message) => {
+/**
+ * Thin wrapper that routes through the centralised notification service.
+ * Accepts optional `options` (type, link, priority) for richer notifications.
+ */
+const createShiftNotification = async (userId, title, message, options = {}) => {
   if (!userId) return;
-  await Notification.create({
-    userId,
-    title,
-    message,
-    isRead: false,
-  });
+  await sendNotification(userId, title, message, options);
 };
 
 const ensureShiftAcknowledgement = async (shiftId, userId) => {
@@ -214,28 +217,168 @@ const ensureShiftAcknowledgement = async (shiftId, userId) => {
   });
 };
 
-const notifyAssignedUserForShift = async (shift, statusLabel) => {
+/**
+ * Send an enriched notification to the assigned student when a shift changes status.
+ *
+ * @param {object} shift       - Shift Sequelize instance (with associations loaded)
+ * @param {string} statusLabel - one of the SHIFT_STATUS values
+ * @param {object} [oldShift]  - snapshot of the shift BEFORE the update (for change diffs)
+ */
+const notifyAssignedUserForShift = async (shift, statusLabel, oldShift = null) => {
   if (!shift?.assigned_user_id) return;
 
   const shiftDateLabel = shift.shift_date || "recurring";
-  const timeLabel = `${shift.start_time}-${shift.end_time}`;
+  const timeLabel = `${shift.start_time} - ${shift.end_time}`;
+  const positionName = shift.position?.position_name || "Unknown Position";
+  const departmentName = shift.department?.department_name || shift.department?.name || "Unknown Department";
 
   if (statusLabel !== SHIFT_STATUS.CANCELLED) {
     await ensureShiftAcknowledgement(shift.shift_id, shift.assigned_user_id);
   }
 
   const titleByStatus = {
-    [SHIFT_STATUS.PUBLISHED]: "Shift Published",
-    [SHIFT_STATUS.CHANGED]: "Shift Changed",
+    [SHIFT_STATUS.PUBLISHED]: "New Shift Assigned",
+    [SHIFT_STATUS.CHANGED]: "Shift Updated",
     [SHIFT_STATUS.CANCELLED]: "Shift Cancelled",
     [SHIFT_STATUS.DRAFT]: "Shift Assigned",
   };
 
+  const typeByStatus = {
+    [SHIFT_STATUS.PUBLISHED]: "shift_assignment",
+    [SHIFT_STATUS.CHANGED]: "shift_change",
+    [SHIFT_STATUS.CANCELLED]: "shift_cancellation",
+    [SHIFT_STATUS.DRAFT]: "shift_assignment",
+  };
+
+  let message;
+
+  if (statusLabel === SHIFT_STATUS.CANCELLED) {
+    // US2 AC3 – cancellation notification with date and time of the cancelled shift
+    message = `Your shift on ${shiftDateLabel} (${timeLabel}) for ${positionName} at ${departmentName} has been cancelled.`;
+  } else if ((statusLabel === SHIFT_STATUS.CHANGED) && oldShift) {
+    // US2 AC2 / AC4 – show old vs new details
+    const changes = [];
+
+    if (String(oldShift.start_time) !== String(shift.start_time) || String(oldShift.end_time) !== String(shift.end_time)) {
+      changes.push(`Time changed from ${oldShift.start_time} - ${oldShift.end_time} to ${shift.start_time} - ${shift.end_time}`);
+    }
+    if (String(oldShift.shift_date) !== String(shift.shift_date)) {
+      changes.push(`Date changed from ${oldShift.shift_date} to ${shift.shift_date}`);
+    }
+    if (String(oldShift.position_id) !== String(shift.position_id)) {
+      const oldPosName = oldShift.position?.position_name || `Position #${oldShift.position_id}`;
+      changes.push(`Position changed from ${oldPosName} to ${positionName}`);
+    }
+
+    const diffSummary = changes.length > 0
+      ? changes.join("; ")
+      : "Some shift details have been updated";
+
+    message = `Your shift at ${departmentName} has been updated. ${diffSummary}.`;
+  } else {
+    // US1 AC2 – assignment notification with full shift details
+    message = `You have been assigned to a shift on ${shiftDateLabel} (${timeLabel}) for ${positionName} at ${departmentName}.`;
+  }
+
   await createShiftNotification(
     shift.assigned_user_id,
     titleByStatus[statusLabel] || "Shift Update",
-    `Your shift for ${shiftDateLabel} (${timeLabel}) is now ${statusLabel}.`,
+    message,
+    {
+      type: typeByStatus[statusLabel] || "shift_assignment",
+      // US1 AC3 / US2 AC1 – deep-link directly to the shift details page
+      link: `/shifts/${shift.shift_id}`,
+      priority: "normal",
+    },
   );
+};
+
+/**
+ * Find all active managers for a given department.
+ * Returns an array of user IDs.
+ */
+const getDepartmentManagerIds = async (departmentId) => {
+  if (!departmentId) return [];
+
+  const managerMemberships = await UserDepartment.findAll({
+    where: { department_id: departmentId, is_active: true },
+    include: [{
+      model: db.role,
+      as: "role",
+      required: true,
+    }],
+  });
+
+  return managerMemberships
+    .filter((m) => {
+      const roleName = String(m.role?.role_name || "").toLowerCase();
+      return roleName.includes("manager") || roleName.includes("supervisor");
+    })
+    .map((m) => m.user_id);
+};
+
+/**
+ * Detect unassigned (gap) shifts from a list of just-published shifts and send
+ * one consolidated gap notification per manager per department.
+ *
+ * US3 AC1, AC2, AC3, AC4
+ *
+ * @param {Array} publishedShifts - Shift instances (with associations) that were just published
+ */
+const notifyManagersOfGaps = async (publishedShifts) => {
+  // Collect gaps: published shifts with no assigned user
+  const gaps = publishedShifts.filter((s) => !s.assigned_user_id);
+  if (gaps.length === 0) return;
+
+  // Group gaps by department
+  const gapsByDepartment = {};
+  for (const gap of gaps) {
+    const deptId = gap.department_id;
+    if (!gapsByDepartment[deptId]) {
+      gapsByDepartment[deptId] = [];
+    }
+    gapsByDepartment[deptId].push(gap);
+  }
+
+  for (const [deptId, deptGaps] of Object.entries(gapsByDepartment)) {
+    const managerIds = await getDepartmentManagerIds(Number(deptId));
+    if (managerIds.length === 0) continue;
+
+    const departmentName = deptGaps[0]?.department?.department_name
+      || deptGaps[0]?.department?.name
+      || `Department #${deptId}`;
+
+    // US3 AC2 – determine if any gap involves a critical position
+    const hasCriticalGap = deptGaps.some((g) => g.position?.is_critical === true);
+    const priority = hasCriticalGap ? "high" : "normal";
+
+    // US3 AC4 – build a consolidated summary
+    const gapCount = deptGaps.length;
+    const gapLines = deptGaps.map((g) => {
+      const pos = g.position?.position_name || `Position #${g.position_id}`;
+      const date = g.shift_date || "recurring";
+      const time = `${g.start_time} - ${g.end_time}`;
+      const criticalTag = g.position?.is_critical ? " [CRITICAL]" : "";
+      return `  • ${date} ${time} – ${pos}${criticalTag}`;
+    }).join("\n");
+
+    const title = hasCriticalGap
+      ? `⚠ Coverage Gap Alert – ${departmentName} (${gapCount} gap${gapCount !== 1 ? "s" : ""})`
+      : `Coverage Gap Alert – ${departmentName} (${gapCount} gap${gapCount !== 1 ? "s" : ""})`;
+
+    const message = `${gapCount} coverage gap${gapCount !== 1 ? "s" : ""} found in ${departmentName}:\n${gapLines}`;
+
+    // US3 AC3 – link to the schedule view for that department
+    const link = `/schedule?department_id=${deptId}`;
+
+    for (const managerId of managerIds) {
+      await sendNotification(managerId, title, message, {
+        type: "coverage_gap",
+        link,
+        priority,
+      });
+    }
+  }
 };
 
 const createShiftAuditEntry = async (shiftId, actorUserId, action, details = null) => {
@@ -548,8 +691,8 @@ export const updateShift = async (req, res) => {
   const id = req.params.id;
 
   try {
-    // Get the existing shift first
-    const existingShift = await Shift.findByPk(id);
+    // Get the existing shift first (with associations so we can build change diffs)
+    const existingShift = await Shift.findByPk(id, { include: shiftIncludes });
 
     if (!existingShift) {
       return res.status(404).send({
@@ -637,7 +780,8 @@ export const updateShift = async (req, res) => {
         status === SHIFT_STATUS.CHANGED ||
         status === SHIFT_STATUS.CANCELLED
       ) {
-        await notifyAssignedUserForShift(updatedShift, status);
+        // Pass existingShift as oldShift so change notifications include old vs new details
+        await notifyAssignedUserForShift(updatedShift, status, existingShift);
       }
 
       await createShiftAuditEntry(
@@ -707,6 +851,11 @@ export const updateShiftStatus = async (req, res) => {
       await notifyAssignedUserForShift(updatedShift, status);
     }
 
+    // US3 AC1/AC2/AC3 – notify managers of any gap when a shift is published
+    if (status === SHIFT_STATUS.PUBLISHED) {
+      await notifyManagersOfGaps([updatedShift]);
+    }
+
     await createShiftAuditEntry(
       id,
       req.auth?.userId || updatedShift.created_by,
@@ -753,6 +902,7 @@ export const sendShiftReminder = async (req, res) => {
       shift.assigned_user_id,
       "Shift Reminder",
       `Reminder: You have a shift on ${shift.shift_date || "recurring"} from ${shift.start_time} to ${shift.end_time}.`,
+      { type: "shift_reminder", link: `/shifts/${shift.shift_id}` },
     );
 
     await createShiftAuditEntry(
@@ -1018,6 +1168,102 @@ export const assignUserToShift = async (req, res) => {
     console.error('Error assigning user to shift:', error);
     res.status(500).send({
       message: "Error assigning user to shift."
+    });
+  }
+};
+
+/**
+ * Bulk-publish multiple shifts in one request.
+ *
+ * US1 AC4 – sends one consolidated notification per student listing ALL their new shifts.
+ * US3 AC4 – sends one consolidated gap notification per manager listing ALL coverage gaps.
+ *
+ * POST /shifts/bulk-publish
+ * Body: { shiftIds: [1, 2, 3, ...] }
+ */
+export const bulkPublishShifts = async (req, res) => {
+  const { shiftIds } = req.body;
+
+  if (!Array.isArray(shiftIds) || shiftIds.length === 0) {
+    return res.status(400).send({ message: "shiftIds must be a non-empty array." });
+  }
+
+  try {
+    // Load all target shifts with associations before modifying
+    const shiftsToPublish = await Shift.findAll({
+      where: { shift_id: { [Op.in]: shiftIds } },
+      include: shiftIncludes,
+    });
+
+    if (shiftsToPublish.length === 0) {
+      return res.status(404).send({ message: "No matching shifts found." });
+    }
+
+    // Publish each shift
+    await Shift.update(
+      { is_published: true, trade_status: null },
+      { where: { shift_id: { [Op.in]: shiftIds } } },
+    );
+
+    // Reload all published shifts with fresh data
+    const publishedShifts = await Shift.findAll({
+      where: { shift_id: { [Op.in]: shiftIds } },
+      include: shiftIncludes,
+    });
+
+    // -----------------------------------------------------------------------
+    // US1 AC4 – consolidated per-student notifications
+    // Group assigned shifts by student and send one summary notification each
+    // -----------------------------------------------------------------------
+    const shiftsByStudent = {};
+    for (const shift of publishedShifts) {
+      if (!shift.assigned_user_id) continue;
+      if (!shiftsByStudent[shift.assigned_user_id]) {
+        shiftsByStudent[shift.assigned_user_id] = [];
+      }
+      shiftsByStudent[shift.assigned_user_id].push(shift);
+    }
+
+    for (const [userId, studentShifts] of Object.entries(shiftsByStudent)) {
+      await ensureShiftAcknowledgement(studentShifts[0].shift_id, Number(userId));
+
+      const shiftCount = studentShifts.length;
+      const shiftLines = studentShifts.map((s) => {
+        const pos = s.position?.position_name || `Position #${s.position_id}`;
+        const dept = s.department?.department_name || s.department?.name || "";
+        const date = s.shift_date || "recurring";
+        return `  • ${date} (${s.start_time} - ${s.end_time}) – ${pos}${dept ? " at " + dept : ""}`;
+      }).join("\n");
+
+      const title = `${shiftCount} New Shift${shiftCount !== 1 ? "s" : ""} Assigned`;
+      const message = `You have been assigned to ${shiftCount} new shift${shiftCount !== 1 ? "s" : ""}:\n${shiftLines}`;
+
+      // Link to the schedule/shifts list – users can browse all assigned shifts
+      await sendNotification(Number(userId), title, message, {
+        type: "shift_assignment",
+        link: "/schedule",
+        priority: "normal",
+      });
+    }
+
+    // -----------------------------------------------------------------------
+    // US3 AC4 – consolidated gap notification per manager
+    // -----------------------------------------------------------------------
+    await notifyManagersOfGaps(publishedShifts);
+
+    // Audit log
+    const actorUserId = req.auth?.userId;
+    for (const shift of publishedShifts) {
+      await createShiftAuditEntry(shift.shift_id, actorUserId || shift.created_by, "status_changed", { status: SHIFT_STATUS.PUBLISHED });
+    }
+
+    return res.send({
+      message: `${publishedShifts.length} shift(s) published successfully.`,
+      data: publishedShifts.map(withShiftStatus),
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: `Error bulk-publishing shifts: ${err.message}`,
     });
   }
 };

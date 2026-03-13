@@ -34,6 +34,31 @@ const Notification = SequelizeInstance.define("notification", {
     type: Sequelize.BOOLEAN,
     defaultValue: false
   },
+  // Notification category — used to drive routing and icons on the frontend
+  type: {
+    type: Sequelize.ENUM(
+      "shift_assignment",
+      "shift_change",
+      "shift_cancellation",
+      "shift_reassignment",
+      "shift_reminder",
+      "coverage_gap"
+    ),
+    allowNull: true,
+    defaultValue: null
+  },
+  // Deep-link path (e.g. /shifts/42) — frontend uses this for direct navigation
+  link: {
+    type: Sequelize.STRING(500),
+    allowNull: true,
+    defaultValue: null
+  },
+  // "high" priority is reserved for critical-position coverage gap alerts
+  priority: {
+    type: Sequelize.ENUM("normal", "high"),
+    allowNull: false,
+    defaultValue: "normal"
+  },
   createdAt: {
     type: Sequelize.DATE,
     allowNull: false,

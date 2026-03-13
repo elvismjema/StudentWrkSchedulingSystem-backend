@@ -26,6 +26,7 @@ import ShiftTask from "./shiftTask.model.js";
 import DepartmentHours from "./department_hours.model.js";
 import Qualification from "./qualification.model.js";
 import UserQualification from "./user_qualification.model.js";
+import PositionQualification from "./positionQualification.model.js";
 import UserDepartment from "./user_department.model.js";
 import PendingAssignment from "./pending_assignment.model.js";
 
@@ -57,6 +58,7 @@ db.shiftTask = ShiftTask;
 db.departmentHours = DepartmentHours;
 db.qualification = Qualification;
 db.userQualification = UserQualification;
+db.positionQualification = PositionQualification;
 db.userDepartment = UserDepartment;
 db.pendingAssignment = PendingAssignment;
 
@@ -574,6 +576,29 @@ db.pendingAssignment.belongsTo(db.user, {
   foreignKey: "created_by",
   as: "creator",
   onDelete: "SET NULL",
+});
+
+// PositionQualification relationships
+db.position.hasMany(db.positionQualification, {
+  foreignKey: "position_id",
+  as: "positionQualifications",
+});
+
+db.positionQualification.belongsTo(db.position, {
+  foreignKey: "position_id",
+  as: "position",
+  onDelete: "CASCADE",
+});
+
+db.qualification.hasMany(db.positionQualification, {
+  foreignKey: "qualification_id",
+  as: "positionQualifications",
+});
+
+db.positionQualification.belongsTo(db.qualification, {
+  foreignKey: "qualification_id",
+  as: "qualification",
+  onDelete: "CASCADE",
 });
 
 export default db;
