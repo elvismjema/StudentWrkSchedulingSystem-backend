@@ -52,8 +52,9 @@ const startServer = async () => {
     await db.sequelize.authenticate();
     logger.info("Database connection established");
     
-    // Sync schema to ensure all tables exist (safe: only creates missing tables)
-    await db.sequelize.sync();
+    // Sync schema – alter:true adds missing columns (safe for adding new fields)
+    // TODO: revert to sync() after request_status column is confirmed on deployed DB
+    await db.sequelize.sync({ alter: true });
     logger.info("Database schema synchronized");
 
     // Seed essential data (uses findOrCreate, safe to run every startup)
