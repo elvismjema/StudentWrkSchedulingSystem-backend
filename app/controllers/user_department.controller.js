@@ -1,6 +1,7 @@
 import db from "../models/index.js";
 import {
   canManageDepartment,
+  getManagedDepartmentIds,
   resolveHighestRoleForUser,
 } from "../authorization/roleAccess.js";
 
@@ -61,16 +62,25 @@ exports.submitJoinRequest = async (req, res) => {
       });
     }
 
-    // Check if the user already has an active membership in this department
+    // Check if the user already has an active or pending membership
+    const Op = db.Sequelize.Op;
     const existing = await UserDepartment.findOne({
       where: {
         user_id: user_id,
         department_id: department_id,
-        is_active: true,
+        [Op.or]: [
+          { is_active: true },
+          { request_status: "pending" },
+        ],
       },
     });
 
     if (existing) {
+      if (existing.request_status === "pending") {
+        return res.status(409).send({
+          message: "A join request is already pending for this department.",
+        });
+      }
       return res.status(409).send({
         message: "User is already an active member of this department.",
       });
@@ -81,7 +91,8 @@ exports.submitJoinRequest = async (req, res) => {
       department_id,
       position_id: position_id || null,
       role_id: role_id || null,
-      is_active: true,
+      is_active: false,
+      request_status: "pending",
       assigned_at: new Date(),
     });
 
@@ -116,6 +127,16 @@ exports.listUserDepartments = async (req, res) => {
           model: Department,
           as: "department",
           attributes: ["department_id", "department_name", "description"],
+        },
+        {
+          model: db.role,
+          as: "role",
+          attributes: ["role_id", "role_name", "permission_level"],
+        },
+        {
+          model: db.position,
+          as: "position",
+          attributes: ["position_id", "position_name"],
         },
       ],
     });
@@ -547,6 +568,109 @@ exports.removeUserRole = async (req, res) => {
     res.status(500).send({
       message: err.message || "Some error occurred while removing user role.",
     });
+  }
+};
+
+// AT-22809: Manager can view list of pending join requests (only for their departments)
+exports.getPendingRequests = async (req, res) => {
+  try {
+    const actorUserId = req.auth?.userId;
+    const actorEmail = req.auth?.email;
+    const managedDeptIds = await getManagedDepartmentIds(actorUserId, actorEmail);
+
+    if (!managedDeptIds.length) {
+      return res.send([]);
+    }
+
+    const Op = db.Sequelize.Op;
+    const pending = await UserDepartment.findAll({
+      where: {
+        request_status: "pending",
+        department_id: { [Op.in]: managedDeptIds },
+      },
+      include: [
+        {
+          model: db.user,
+          as: "user",
+          attributes: ["id", "fName", "lName", "email"],
+        },
+        {
+          model: Department,
+          as: "department",
+          attributes: ["department_id", "department_name", "description"],
+        },
+      ],
+      order: [["assigned_at", "ASC"]],
+    });
+
+    res.send(pending);
+  } catch (err) {
+    res.status(500).send({
+      message: err.message || "Error retrieving pending join requests.",
+    });
+  }
+};
+
+// AT-22890: Manager can approve a student's join request
+exports.approveJoinRequest = async (req, res) => {
+  const udId = req.params.id;
+
+  try {
+    const membership = await UserDepartment.findByPk(udId);
+    if (!membership) {
+      return res.status(404).send({ message: `Request with id=${udId} not found.` });
+    }
+
+    if (membership.request_status !== "pending") {
+      return res.status(400).send({ message: "This request has already been processed." });
+    }
+
+    // Verify manager has access to this department
+    const actorUserId = req.auth?.userId;
+    const actorEmail = req.auth?.email;
+    const canManage = await canManageDepartment(actorUserId, actorEmail, membership.department_id);
+    if (!canManage) {
+      return res.status(403).send({ message: "Forbidden! You can only manage your own departments." });
+    }
+
+    membership.request_status = "approved";
+    membership.is_active = true;
+    await membership.save();
+
+    res.send({ message: "Join request approved.", data: membership });
+  } catch (err) {
+    res.status(500).send({ message: err.message || "Error approving join request." });
+  }
+};
+
+// AT-22891: Manager can deny a student's join request
+exports.rejectJoinRequest = async (req, res) => {
+  const udId = req.params.id;
+
+  try {
+    const membership = await UserDepartment.findByPk(udId);
+    if (!membership) {
+      return res.status(404).send({ message: `Request with id=${udId} not found.` });
+    }
+
+    if (membership.request_status !== "pending") {
+      return res.status(400).send({ message: "This request has already been processed." });
+    }
+
+    const actorUserId = req.auth?.userId;
+    const actorEmail = req.auth?.email;
+    const canManage = await canManageDepartment(actorUserId, actorEmail, membership.department_id);
+    if (!canManage) {
+      return res.status(403).send({ message: "Forbidden! You can only manage your own departments." });
+    }
+
+    membership.request_status = "rejected";
+    membership.is_active = false;
+    await membership.save();
+
+    res.send({ message: "Join request denied.", data: membership });
+  } catch (err) {
+    res.status(500).send({ message: err.message || "Error rejecting join request." });
   }
 };
 
