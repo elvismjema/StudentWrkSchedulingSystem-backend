@@ -10,6 +10,10 @@ const router = express.Router();
 // Create a new Shift
 router.post("/", [verifyToken, requireManager, requireDepartmentManager], shiftController.createShift);
 
+// Bulk-publish multiple shifts (US1 AC4, US3 AC4 – consolidated notifications)
+// Must appear before /:id routes to avoid matching conflicts
+router.post("/bulk-publish", [verifyToken, requireManager, requireDepartmentManager], shiftController.bulkPublishShifts);
+
 // Retrieve all Shifts with optional filters
 router.get("/", [authenticate], shiftController.listShifts);
 
