@@ -1,12 +1,13 @@
 import db from "../models/index.js";
+import fs from "fs/promises";
+import path from "path";
 import { Op } from "sequelize";
 import multer from "multer";
-import path from "path";
-import fs from "fs";
 
-const User = db.user;
 const Qualification = db.qualification;
+const User = db.user;
 const UserQualification = db.userQualification;
+
 const Position = db.position;
 const PositionQualification = db.positionQualification;
 const Shift = db.shift;
@@ -55,402 +56,515 @@ export { upload };
 
 // Get all students with their qualifications (optional filter by qualificationId)
 export const getStudentsWithQualifications = async (req, res) => {
-  try {
-    const { qualificationId } = req.query;
-    
-    let whereClause = { role: 'student' };
-    let includeClause = [
-      {
-        model: Qualification,
-        as: 'qualifications',
-        through: {
-          model: UserQualification,
-          attributes: ['approval_status', 'approved_at', 'document_name']
-        },
-        required: false
-      }
-    ];
 
-    // If qualificationId is provided, filter students who have this qualification
+const UPLOADS_DIR = path.resolve(process.cwd(), "uploads", "qualifications");
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5MB
+const ALLOWED_MIME_TYPES = new Set([
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+]);
+
+const formatUserQualification = (userQualification) => ({
+  user_qualification_id: userQualification.id,
+  qualification_id: userQualification.qualification_id,
+  qualification_name: userQualification?.qualification?.qualification_name || null,
+  description: userQualification?.qualification?.description || null,
+  requires_document: Boolean(userQualification?.qualification?.requires_document),
+  approval_status: String(userQualification.approval_status || "pending").toLowerCase(),
+  document_name: userQualification.file_name,
+  document_path: userQualification.file_path,
+  mime_type: userQualification.mime_type,
+  uploaded_at: userQualification.uploaded_at,
+  approved_at: userQualification.approved_at,
+  rejection_reason: userQualification.rejection_reason,
+  notes: userQualification.notes,
+});
+
+export const listStudentsWithQualifications = async (req, res) => {
+
+  try {
+    const { qualificationId, status } = req.query;
+    const where = {};
+
     if (qualificationId) {
-      includeClause[0].through = {
-        ...includeClause[0].through,
-        where: { qualification_id: qualificationId }
-      };
-      includeClause[0].required = true;
+      where.qualification_id = Number(qualificationId);
     }
 
-    const students = await User.findAll({
-      where: whereClause,
-      attributes: ['id', 'fName', 'lName', 'email', 'role'],
-      include: includeClause,
-      order: [['fName', 'ASC'], ['lName', 'ASC']]
-    });
-
-    // Transform the data to match frontend expectations
-    const transformedStudents = students.map(student => {
-      const studentData = student.toJSON();
-      return {
-        user_id: studentData.id,
-        first_name: studentData.fName,
-        last_name: studentData.lName,
-        email: studentData.email,
-        role: studentData.role,
-        qualifications: studentData.qualifications.map(qual => ({
-          qualification_id: qual.qualification_id,
-          qualification_name: qual.qualification_name,
-          description: qual.description,
-          requires_document: qual.requires_document,
-          approval_status: qual.userQualification?.approval_status || 'PENDING',
-          approved_at: qual.userQualification?.approved_at,
-          document_name: qual.userQualification?.document_name,
-          evidence_filename: qual.userQualification?.evidence_filename,
-          evidence_mime_type: qual.userQualification?.evidence_mime_type,
-          evidence_url: qual.userQualification?.evidence_url,
-          evidence_type: qual.userQualification?.evidence_type,
-          submitted_at: qual.userQualification?.submitted_at,
-          user_qualification_id: qual.userQualification?.user_qualification_id
-        }))
-      };
-    });
-
-    res.status(200).send(transformedStudents);
-  } catch (error) {
-    console.error('Error getting students with qualifications:', error);
-    res.status(500).send({
-      message: "Error retrieving students with qualifications."
-    });
-  }
-};
-
-// Get qualifications for a specific student
-export const getStudentQualifications = async (req, res) => {
-  try {
-    const { userId } = req.params;
-
-    // Verify the user exists and is a student
-    const student = await User.findOne({
-      where: { id: userId, role: 'student' },
-      attributes: ['id', 'fName', 'lName', 'email', 'role']
-    });
-
-    if (!student) {
-      return res.status(404).send({
-        message: "Student not found."
-      });
+    if (status) {
+      const normalizedStatus = String(status).toLowerCase();
+      if (!["pending", "approved", "rejected"].includes(normalizedStatus)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid status filter. Allowed values: pending, approved, rejected",
+        });
+      }
+      where.approval_status = normalizedStatus;
     }
 
-    const userQualifications = await UserQualification.findAll({
-      where: { user_id: userId },
+    const records = await UserQualification.findAll({
+      where,
       include: [
-        {
-          model: Qualification,
-          as: 'qualification',
-          attributes: ['qualification_id', 'qualification_name', 'description', 'requires_document']
-        },
         {
           model: User,
-          as: 'approver',
-          attributes: ['id', 'fName', 'lName'],
-          required: false
-        }
+          as: "user",
+          attributes: ["id", "fName", "lName", "email"],
+        },
+        {
+          model: Qualification,
+          as: "qualification",
+          attributes: ["qualification_id", "qualification_name", "requires_document"],
+        },
       ],
-      order: [['created_at', 'DESC']]
+      order: [["uploaded_at", "DESC"]],
     });
 
-    // Transform the data to match frontend expectations
-    const transformedQualifications = userQualifications.map(uq => ({
-      user_qualification_id: uq.user_qualification_id,
-      qualification_id: uq.qualification.qualification_id,
-      qualification_name: uq.qualification.qualification_name,
-      description: uq.qualification.description,
-      requires_document: uq.qualification.requires_document,
-      approval_status: uq.approval_status,
-      approved_at: uq.approved_at,
-      document_name: uq.document_name,
-      evidence_filename: uq.evidence_filename,
-      evidence_mime_type: uq.evidence_mime_type,
-      evidence_url: uq.evidence_url,
-      evidence_type: uq.evidence_type,
-      submitted_at: uq.submitted_at,
-      approved_by: uq.approver ? `${uq.approver.fName} ${uq.approver.lName}` : null
-    }));
+    const studentsById = new Map();
 
-    res.status(200).send(transformedQualifications);
+    records.forEach((record) => {
+      if (!record.user) return;
+
+      const userId = Number(record.user_id);
+      if (!studentsById.has(userId)) {
+        studentsById.set(userId, {
+          user_id: userId,
+          first_name: record.user.fName,
+          last_name: record.user.lName,
+          email: record.user.email,
+          qualifications: [],
+        });
+      }
+
+      studentsById.get(userId).qualifications.push({
+        qualification_id: record.qualification_id,
+        qualification_name: record?.qualification?.qualification_name || null,
+        requires_document: Boolean(record?.qualification?.requires_document),
+        approval_status: String(record.approval_status || "pending").toLowerCase(),
+      });
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: Array.from(studentsById.values()),
+    });
   } catch (error) {
-    console.error('Error getting student qualifications:', error);
-    res.status(500).send({
-      message: "Error retrieving student qualifications."
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch students with qualifications",
+      error: error.message,
     });
   }
 };
 
-// Get required qualifications for a position
-export const getPositionRequiredQualifications = async (req, res) => {
+export const getStudentQualifications = async (req, res) => {
   try {
-    const { positionId } = req.params;
-
-    // Verify the position exists
-    const position = await Position.findByPk(positionId);
-    if (!position) {
-      return res.status(404).send({
-        message: "Position not found."
+    const userId = Number(req.params.userId);
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid userId",
       });
     }
 
-    const positionQualifications = await PositionQualification.findAll({
-      where: { position_id: positionId },
-      include: [
-        {
-          model: Qualification,
-          as: 'qualification',
-          attributes: ['qualification_id', 'qualification_name', 'description', 'requires_document']
-        }
-      ],
-      order: [['created_at', 'ASC']]
+    const user = await User.findByPk(userId, {
+      attributes: ["id", "fName", "lName", "email"],
     });
 
-    // Transform the data to match frontend expectations
-    const transformedQualifications = positionQualifications.map(pq => ({
-      qualification_id: pq.qualification.qualification_id,
-      qualification_name: pq.qualification.qualification_name,
-      description: pq.qualification.description,
-      requires_document: pq.qualification.requires_document
-    }));
-
-    res.status(200).send(transformedQualifications);
-  } catch (error) {
-    console.error('Error getting position required qualifications:', error);
-    res.status(500).send({
-      message: "Error retrieving position required qualifications."
-    });
-  }
-};
-
-// Get all available qualifications
-export const getAllQualifications = async (req, res) => {
-  try {
-    const qualifications = await Qualification.findAll({
-      attributes: ['qualification_id', 'qualification_name', 'description', 'requires_document'],
-      order: [['qualification_name', 'ASC']]
-    });
-
-    // Transform the data to match frontend expectations
-    const transformedQualifications = qualifications.map(qual => ({
-      qualification_id: qual.qualification_id,
-      qualification_name: qual.qualification_name,
-      description: qual.description,
-      requires_document: qual.requires_document
-    }));
-
-    res.status(200).send(transformedQualifications);
-  } catch (error) {
-    console.error('Error getting all qualifications:', error);
-    res.status(500).send({
-      message: "Error retrieving qualifications."
-    });
-  }
-};
-
-// Check if user is qualified for a position
-export const checkUserQualificationForPosition = async (req, res) => {
-  try {
-    const { userId, positionId } = req.body;
-
-    // Verify user exists
-    const user = await User.findByPk(userId);
     if (!user) {
-      return res.status(404).send({
-        message: "User not found."
+      return res.status(404).json({
+        success: false,
+        message: "Student not found",
       });
     }
 
-    // Verify position exists
-    const position = await Position.findByPk(positionId);
-    if (!position) {
-      return res.status(404).send({
-        message: "Position not found."
-      });
-    }
-
-    // Get required qualifications for the position
-    const requiredQualifications = await PositionQualification.findAll({
-      where: { position_id: positionId },
-      include: [
-        {
-          model: Qualification,
-          as: 'qualification',
-          attributes: ['qualification_id', 'qualification_name']
-        }
-      ]
-    });
-
-    if (requiredQualifications.length === 0) {
-      return res.status(200).send({
-        isQualified: true,
-        message: "No qualifications required for this position."
-      });
-    }
-
-    // Get user's approved qualifications
-    const userQualifications = await UserQualification.findAll({
-      where: { 
+    const qualifications = await UserQualification.findAll({
+      where: {
         user_id: userId,
-        approval_status: 'APPROVED'
+        approval_status: {
+          [Op.in]: ["pending", "approved", "rejected"],
+        },
       },
       include: [
         {
           model: Qualification,
-          as: 'qualification',
-          attributes: ['qualification_id', 'qualification_name']
-        }
-      ]
+          as: "qualification",
+          attributes: ["qualification_id", "qualification_name", "description", "requires_document"],
+        },
+      ],
+      order: [["uploaded_at", "DESC"]],
     });
 
-    const userQualIds = userQualifications.map(uq => uq.qualification_id);
-    const requiredQualIds = requiredQualifications.map(rq => rq.qualification_id);
-
-    // Check if user has all required qualifications
-    const missingQualifications = requiredQualifications.filter(rq => !userQualIds.includes(rq.qualification_id));
-    
-    if (missingQualifications.length === 0) {
-      res.status(200).send({
-        isQualified: true,
-        message: "User has all required qualifications."
-      });
-    } else {
-      const missingQualNames = missingQualifications.map(mq => mq.qualification.qualification_name);
-      res.status(400).send({
-        isQualified: false,
-        message: `User is missing required qualifications: ${missingQualNames.join(', ')}`,
-        missingQualifications: missingQualifications.map(mq => ({
-          qualification_id: mq.qualification_id,
-          qualification_name: mq.qualification.qualification_name
-        }))
-      });
-    }
+    return res.status(200).json({
+      success: true,
+      data: qualifications.map(formatUserQualification),
+    });
   } catch (error) {
-    console.error('Error checking user qualification for position:', error);
-    res.status(500).send({
-      message: `Error checking user qualification: ${error.message}`
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch student qualifications",
+      error: error.message,
     });
   }
 };
 
-// Upload qualification evidence for current user
-export const uploadQualificationEvidence = async (req, res) => {
+export const reviewQualificationDocument = async (req, res) => {
   try {
-    const { qualification_id, evidence_type } = req.body;
-    const file = req.file;
+    const qualificationRecordId = Number(req.params.id);
+    const statusRaw = String(req.body.approval_status || "").toLowerCase();
+    const rejectionReason = String(req.body.rejection_reason || "").trim();
 
-    // Validate required fields
-    if (!file) {
-      return res.status(400).send({
-        message: "File is required."
+    if (!qualificationRecordId) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid user qualification id",
       });
     }
 
-    if (!qualification_id) {
-      return res.status(400).send({
-        message: "qualification_id is required."
+    if (!["approved", "rejected"].includes(statusRaw)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid approval_status. Allowed values: approved, rejected",
       });
     }
 
-    if (!evidence_type || !['RESUME', 'CERTIFICATE', 'OTHER'].includes(evidence_type)) {
-      return res.status(400).send({
-        message: "evidence_type must be one of: RESUME, CERTIFICATE, OTHER"
+    if (statusRaw === "rejected" && !rejectionReason) {
+      return res.status(400).json({
+        success: false,
+        message: "A rejection reason is required when rejecting a qualification",
       });
     }
 
-    // Get current user from session
-    let token = null;
-    let authHeader = req.get("authorization");
-    
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      token = authHeader.slice(7);
-    }
-
-    const session = await db.session.findOne({
-      where: { token: token },
-      include: [{ model: db.user, as: 'user' }]
-    });
-
-    if (!session || session.expirationDate < Date.now()) {
-      return res.status(401).send({
-        message: "Unauthorized! Invalid or expired token."
-      });
-    }
-
-    const user = session.user;
-
-    // Verify user is a student
-    if (user.role !== 'student') {
-      return res.status(403).send({
-        message: "Only students can upload qualification evidence."
-      });
-    }
-
-    // Verify qualification exists
-    const qualification = await Qualification.findByPk(qualification_id);
-    if (!qualification) {
-      return res.status(404).send({
-        message: "Qualification not found."
-      });
-    }
-
-    // Check if user qualification already exists
-    let userQualification = await UserQualification.findOne({
-      where: {
-        user_id: user.id,
-        qualification_id: qualification_id
-      }
-    });
-
-    const evidenceUrl = `/uploads/qualifications/${file.filename}`;
-    const now = new Date();
-
-    if (userQualification) {
-      // Update existing record
-      await userQualification.update({
-        evidence_filename: file.originalname,
-        evidence_mime_type: file.mimetype,
-        evidence_url: evidenceUrl,
-        evidence_type: evidence_type,
-        submitted_at: now,
-        approval_status: 'PENDING', // Reset to pending on re-upload
-        approved_by_user_id: null,
-        approved_at: null
-      });
-    } else {
-      // Create new record
-      userQualification = await UserQualification.create({
-        user_id: user.id,
-        qualification_id: qualification_id,
-        evidence_filename: file.originalname,
-        evidence_mime_type: file.mimetype,
-        evidence_url: evidenceUrl,
-        evidence_type: evidence_type,
-        submitted_at: now,
-        approval_status: 'PENDING'
-      });
-    }
-
-    // Return the updated/created record
-    const result = await UserQualification.findByPk(userQualification.user_qualification_id, {
+    const qualificationRecord = await UserQualification.findByPk(qualificationRecordId, {
       include: [
         {
           model: Qualification,
-          as: 'qualification',
-          attributes: ['qualification_id', 'qualification_name', 'description', 'requires_document']
-        }
-      ]
+          as: "qualification",
+          attributes: ["qualification_id", "qualification_name", "description", "requires_document"],
+        },
+      ],
     });
 
-    res.status(201).send(result);
+    if (!qualificationRecord) {
+      return res.status(404).json({
+        success: false,
+        message: "User qualification record not found",
+      });
+    }
+
+    qualificationRecord.approval_status = statusRaw;
+
+    if (statusRaw === "approved") {
+      qualificationRecord.approved_by = req.auth?.userId || null;
+      qualificationRecord.approved_at = new Date();
+      qualificationRecord.rejection_reason = null;
+    } else {
+      qualificationRecord.approved_by = null;
+      qualificationRecord.approved_at = null;
+      qualificationRecord.rejection_reason = rejectionReason;
+    }
+
+    await qualificationRecord.save();
+
+    return res.status(200).json({
+      success: true,
+      message:
+        statusRaw === "approved"
+          ? "Qualification document approved"
+          : "Qualification document rejected",
+      data: formatUserQualification(qualificationRecord),
+    });
   } catch (error) {
-    console.error('Upload error:', error);
-    res.status(500).send({
-      message: `Error uploading qualification evidence: ${error.message}`
+    return res.status(500).json({
+      success: false,
+      message: "Failed to review qualification document",
+      error: error.message,
+    });
+  }
+};
+
+// Create and save a new qualification
+export const createQualification = async (req, res) => {
+  try {
+    const {
+      qualification_name,
+      description,
+      requires_document
+    } = req.body;
+
+    if (!qualification_name) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required field: qualification_name"
+      });
+    }
+
+    const qualification = await Qualification.create({
+      qualification_name,
+      description,
+      requires_document
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: qualification
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to create qualification",
+      error: error.message
+    });
+  }
+};
+
+// Retrieve all qualifications
+export const listQualifications = async (req, res) => {
+  try {
+    const qualifications = await Qualification.findAll({
+      order: [["qualification_name", "ASC"]]
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: qualifications
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch qualifications",
+      error: error.message
+    });
+  }
+};
+
+// Retrieve a single qualification by id
+export const getQualificationById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const qualification = await Qualification.findByPk(id);
+
+    if (!qualification) {
+      return res.status(404).json({
+        success: false,
+        message: "Qualification not found"
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: qualification
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch qualification",
+      error: error.message
+    });
+  }
+};
+
+// Update a qualification
+export const updateQualification = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const qualification = await Qualification.findByPk(id);
+    if (!qualification) {
+      return res.status(404).json({
+        success: false,
+        message: "Qualification not found"
+      });
+    }
+
+    const updatableFields = [
+      "qualification_name",
+      "description",
+      "requires_document"
+    ];
+
+    updatableFields.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        qualification[field] = req.body[field];
+      }
+    });
+
+    await qualification.save();
+
+    return res.status(200).json({
+      success: true,
+      data: qualification
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update qualification",
+      error: error.message
+    });
+  }
+};
+
+// Delete a qualification by id
+export const deleteQualification = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const qualification = await Qualification.findByPk(id);
+
+    if (!qualification) {
+      return res.status(404).json({
+        success: false,
+        message: "Qualification not found"
+      });
+    }
+
+    await qualification.destroy();
+
+    return res.status(200).json({
+      success: true,
+      message: "Qualification deleted successfully"
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to delete qualification",
+      error: error.message
+    });
+  }
+};
+
+// Upload a qualification document and link it to a user + qualification record
+export const uploadQualificationDocument = async (req, res) => {
+  try {
+    const {
+      user_id,
+      qualification_id,
+      file_name,
+      file_content_base64,
+      mime_type,
+      notes,
+    } = req.body;
+
+    if (!user_id || !qualification_id || !file_name || !file_content_base64) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Missing required fields: user_id, qualification_id, file_name, file_content_base64",
+      });
+    }
+
+    if (mime_type && !ALLOWED_MIME_TYPES.has(mime_type)) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Unsupported file type. Allowed types: application/pdf, image/png, image/jpeg",
+      });
+    }
+
+    const [user, qualification] = await Promise.all([
+      User.findByPk(user_id),
+      Qualification.findByPk(qualification_id),
+    ]);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    if (!qualification) {
+      return res.status(404).json({
+        success: false,
+        message: "Qualification not found",
+      });
+    }
+
+    let buffer;
+    try {
+      const normalizedBase64 = String(file_content_base64).replace(/\s/g, "");
+      if (!/^[A-Za-z0-9+/=]+$/.test(normalizedBase64)) {
+        throw new Error("Invalid base64 charset");
+      }
+
+      buffer = Buffer.from(file_content_base64, "base64");
+      if (!buffer.length) {
+        throw new Error("Empty decoded buffer");
+      }
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid file_content_base64 payload",
+      });
+    }
+
+    if (buffer.length > MAX_UPLOAD_BYTES) {
+      return res.status(400).json({
+        success: false,
+        message: `File exceeds maximum allowed size of ${MAX_UPLOAD_BYTES} bytes`,
+      });
+    }
+
+    await fs.mkdir(UPLOADS_DIR, { recursive: true });
+
+    const safeFileName = file_name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const storedFileName = `${user_id}-${qualification_id}-${Date.now()}-${safeFileName}`;
+    const relativePath = path.join("uploads", "qualifications", storedFileName);
+    const absolutePath = path.resolve(process.cwd(), relativePath);
+
+    await fs.writeFile(absolutePath, buffer);
+
+    const existingLink = await UserQualification.findOne({
+      where: { user_id, qualification_id },
+    });
+
+    if (existingLink) {
+      if (existingLink.file_path) {
+        const previousAbsolutePath = path.resolve(process.cwd(), existingLink.file_path);
+        await fs.unlink(previousAbsolutePath).catch(() => null);
+      }
+
+      existingLink.file_name = file_name;
+      existingLink.file_path = relativePath;
+      existingLink.mime_type = mime_type || null;
+      existingLink.notes = notes || null;
+      existingLink.uploaded_at = new Date();
+      existingLink.approval_status = "pending";
+      existingLink.approved_at = null;
+      existingLink.approved_by = null;
+      existingLink.rejection_reason = null;
+      await existingLink.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Qualification document replaced and relinked successfully",
+        data: existingLink,
+      });
+    }
+
+    const linkedRecord = await UserQualification.create({
+      user_id,
+      qualification_id,
+      file_name: file_name,
+      file_path: relativePath,
+      mime_type: mime_type || null,
+      notes: notes || null,
+      approval_status: "pending",
+      approved_by: null,
+      approved_at: null,
+      rejection_reason: null,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Qualification document uploaded and linked successfully",
+      data: linkedRecord,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to upload qualification document",
+      error: error.message,
     });
   }
 };

@@ -16,12 +16,13 @@ const Qualification = SequelizeInstance.define(
       field: "qualification_name"
     },
     description: {
-      type: DataTypes.TEXT,
+      type: DataTypes.STRING,
       allowNull: true,
       field: "description"
     },
     requires_document: {
       type: DataTypes.BOOLEAN,
+      allowNull: true,
       defaultValue: false,
       field: "requires_document"
     },
@@ -30,23 +31,12 @@ const Qualification = SequelizeInstance.define(
       allowNull: false,
       defaultValue: DataTypes.NOW,
       field: "created_at"
-    },
-    updated_at: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: DataTypes.NOW,
-      field: "updated_at"
     }
   },
   {
     tableName: "qualifications",
     timestamps: false,
-    underscored: true,
-    hooks: {
-      beforeUpdate: (qualification) => {
-        qualification.updated_at = new Date();
-      }
-    }
+    underscored: true
   }
 );
 

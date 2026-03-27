@@ -1,6 +1,6 @@
-
+// Server entry point for Student Worker Scheduling System - Team 2
 import routes from "./app/routes/index.js";
-import express, { json, urlencoded } from "express"
+import express from "express";
 import cors from "cors";
 import morgan from "morgan";
 import path from "path";
@@ -8,6 +8,7 @@ import { fileURLToPath } from "url";
 
 import db  from "./app/models/index.js";
 import logger from "./app/config/logger.js";
+
 
 // Get __dirname equivalent in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -23,7 +24,12 @@ db.sequelize.sync({ alter: true })
     process.exit(1); // Exit if we can't sync the database
   });
 
+import { runSeeds } from "./app/config/seed.js";
+
+
 const app = express();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // HTTP request logger middleware
 app.use(morgan('combined', { stream: logger.stream }));
@@ -58,10 +64,30 @@ app.use("/workerscheduling-t2", routes);
 
 // set port, listen for requests
 const PORT = process.env.PORT || 3132;
+const startServer = async () => {
+  try {
+    await db.sequelize.authenticate();
+    logger.info("Database connection established");
+    
+    // Sync schema – alter:true adds missing columns (safe for adding new fields)
+    // TODO: revert to sync() after request_status column is confirmed on deployed DB
+    await db.sequelize.sync({ alter: true });
+    logger.info("Database schema synchronized");
+
+    // Seed essential data (uses findOrCreate, safe to run every startup)
+    await runSeeds();
+
+    app.listen(PORT, () => {
+      logger.info(`Server is running on port ${PORT}`);
+    });
+  } catch (err) {
+    logger.error(`Startup failed: ${err.message}`);
+    process.exit(1);
+  }
+};
+
 if (process.env.NODE_ENV !== "test") {
-  app.listen(PORT, () => {
-    logger.info(`Server is running on port ${PORT}`);
-  });
+  startServer();
 }
 
 // Export logger for use in other modules

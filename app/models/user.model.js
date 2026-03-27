@@ -20,10 +20,14 @@ const User = SequelizeInstance.define("user", {
     type: Sequelize.STRING,
     allowNull: false,
   },
-  role: {
-    type: Sequelize.ENUM('student', 'manager', 'admin'),
+  is_active: {
+    type: Sequelize.BOOLEAN,
     allowNull: false,
-    defaultValue: 'student'
+    defaultValue: true,
+  },
+  deactivated_at: {
+    type: Sequelize.DATE,
+    allowNull: true,
   },
   // refresh_token: {
   //   type: Sequelize.STRING(512),
@@ -36,4 +40,3 @@ const User = SequelizeInstance.define("user", {
 });
 
 export default User;
-

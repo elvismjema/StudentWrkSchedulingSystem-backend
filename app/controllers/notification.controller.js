@@ -1,4 +1,5 @@
 import db from "../models/index.js";
+import { resolveHighestRoleForUser } from "../authorization/roleAccess.js";
 
 const Notification = db.notification;
 const User = db.user;
@@ -50,17 +51,30 @@ export const createNotification = async (req, res) => {
 // Retrieve all Notifications
 export const getAllNotifications = async (req, res) => {
   try {
-    const { userId } = req.query;
+    const requestedUserId = req.query.userId ? Number(req.query.userId) : null;
+    const authUserId = Number(req.auth?.userId);
+    const authEmail = req.auth?.email;
+    const authRole = await resolveHighestRoleForUser(authUserId, authEmail);
+
     let condition = {};
-    
-    if (userId) {
-      condition.userId = userId;
+
+    if (requestedUserId) {
+      if (requestedUserId !== authUserId && authRole !== "manager" && authRole !== "admin") {
+        return res.status(403).json({
+          success: false,
+          message: "Forbidden! You can only read your own notifications.",
+        });
+      }
+      condition.userId = requestedUserId;
+    } else if (authRole !== "manager" && authRole !== "admin") {
+      condition.userId = authUserId;
     }
 
     const notifications = await Notification.findAll({ 
       where: condition,
       include: [{
         model: User,
+        as: "user",
         attributes: ['id', 'fName', 'lName', 'email']
       }],
       order: [['createdAt', 'DESC']]
@@ -84,10 +98,13 @@ export const getAllNotifications = async (req, res) => {
 export const getNotificationById = async (req, res) => {
   try {
     const { id } = req.params;
+    const authUserId = Number(req.auth?.userId);
+    const authRole = await resolveHighestRoleForUser(authUserId, req.auth?.email);
 
     const notification = await Notification.findByPk(id, {
       include: [{
         model: User,
+        as: "user",
         attributes: ['id', 'fName', 'lName', 'email']
       }]
     });
@@ -96,6 +113,13 @@ export const getNotificationById = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: `Notification with id=${id} not found`
+      });
+    }
+
+    if (notification.userId !== authUserId && authRole !== "manager" && authRole !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden! You can only read your own notifications.",
       });
     }
 
@@ -187,6 +211,23 @@ export const deleteNotification = async (req, res) => {
 export const markAsRead = async (req, res) => {
   try {
     const { id } = req.params;
+    const authUserId = Number(req.auth?.userId);
+    const authRole = await resolveHighestRoleForUser(authUserId, req.auth?.email);
+
+    const notification = await Notification.findByPk(id);
+    if (!notification) {
+      return res.status(404).json({
+        success: false,
+        message: `Notification with id=${id} not found`
+      });
+    }
+
+    if (notification.userId !== authUserId && authRole !== "manager" && authRole !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden! You can only update your own notifications.",
+      });
+    }
 
     const [updated] = await Notification.update(
       { 
@@ -197,9 +238,9 @@ export const markAsRead = async (req, res) => {
     );
 
     if (updated === 0) {
-      return res.status(404).json({
+      return res.status(500).json({
         success: false,
-        message: `Notification with id=${id} not found`
+        message: "Notification update failed",
       });
     }
 
