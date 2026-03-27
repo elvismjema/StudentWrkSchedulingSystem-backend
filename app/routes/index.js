@@ -22,6 +22,7 @@ import QualificationRoutes from "./qualification.routes.js";
 import UserDepartmentRoutes from "./user_department.routes.js";
 import ManagerRoutes from "./manager.routes.js";
 import AdminRoutes from "./admin.routes.js";
+import ScheduleTemplateRoutes from "./schedule_template.routes.js";
 
 const router = Router();
 
@@ -48,5 +49,6 @@ router.use("/qualifications", QualificationRoutes);
 router.use("/user-departments", UserDepartmentRoutes);
 router.use("/manager", ManagerRoutes);
 router.use("/admin", AdminRoutes);
+router.use("/schedule-templates", ScheduleTemplateRoutes);
 
 export default router;
