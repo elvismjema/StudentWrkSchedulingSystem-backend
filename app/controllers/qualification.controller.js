@@ -7,6 +7,56 @@ import multer from "multer";
 const Qualification = db.qualification;
 const User = db.user;
 const UserQualification = db.userQualification;
+
+const Position = db.position;
+const PositionQualification = db.positionQualification;
+const Shift = db.shift;
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = 'uploads/qualifications';
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const extension = path.extname(file.originalname);
+    cb(null, file.fieldname + '-' + uniqueSuffix + extension);
+  }
+});
+
+const fileFilter = (req, file, cb) => {
+  const allowedMimes = [
+    'application/pdf',
+    'image/png',
+    'image/jpeg',
+    'image/jpg'
+  ];
+  
+  if (allowedMimes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Invalid file type. Only PDF, PNG, and JPEG files are allowed.'), false);
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+});
+
+// Export the upload middleware
+export { upload };
+
+// Get all students with their qualifications (optional filter by qualificationId)
+export const getStudentsWithQualifications = async (req, res) => {
+
 const UPLOADS_DIR = path.resolve(process.cwd(), "uploads", "qualifications");
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5MB
 const ALLOWED_MIME_TYPES = new Set([
@@ -33,6 +83,7 @@ const formatUserQualification = (userQualification) => ({
 });
 
 export const listStudentsWithQualifications = async (req, res) => {
+
   try {
     const { qualificationId, status } = req.query;
     const where = {};

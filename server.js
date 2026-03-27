@@ -8,7 +8,24 @@ import { fileURLToPath } from "url";
 
 import db  from "./app/models/index.js";
 import logger from "./app/config/logger.js";
+
+
+// Get __dirname equivalent in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+db.sequelize.sync({ alter: true })
+  .then(() => {
+    logger.info('Database synchronized successfully');
+    logger.info('Models in sync: ' + Object.keys(db).filter(key => typeof db[key] === 'object' && db[key] !== null && 'tableName' in db[key]).join(', '));
+  })
+  .catch(err => {
+    logger.error('Error syncing database:', err);
+    process.exit(1); // Exit if we can't sync the database
+  });
+
 import { runSeeds } from "./app/config/seed.js";
+
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
