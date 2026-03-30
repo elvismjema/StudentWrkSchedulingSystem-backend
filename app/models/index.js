@@ -306,6 +306,12 @@ db.user.hasMany(db.scheduleTemplate, {
   as: "createdScheduleTemplates"
 });
 
+// Template shifts: Shift records with is_template=true belong to a ScheduleTemplate
+db.scheduleTemplate.hasMany(db.shift, {
+  foreignKey: "template_id",
+  as: "templateShifts"
+});
+
 // Availability relationships
 // User can have many availabilities
 db.user.hasMany(
