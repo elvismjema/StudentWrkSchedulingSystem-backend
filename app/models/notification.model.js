@@ -42,7 +42,9 @@ const Notification = SequelizeInstance.define("notification", {
       "shift_cancellation",
       "shift_reassignment",
       "shift_reminder",
-      "coverage_gap"
+      "coverage_gap",
+      "availability_conflict",
+      "schedule_published"
     ),
     allowNull: true,
     defaultValue: null
