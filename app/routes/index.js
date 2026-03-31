@@ -20,9 +20,6 @@ import RoleRoutes from "./role.routes.js";
 import DepartmentHoursRoutes from "./department_hours.routes.js";
 import QualificationRoutes from "./qualification.routes.js";
 
-import DepartmentRoutes from "./department.routes.js";
-import RoleRoutes from "./role.routes.js";
-
 import UserDepartmentRoutes from "./user_department.routes.js";
 import ManagerRoutes from "./manager.routes.js";
 import AdminRoutes from "./admin.routes.js";
@@ -51,9 +48,6 @@ router.use("/departments", DepartmentRoutes);
 router.use("/roles", RoleRoutes);
 router.use("/department-hours", DepartmentHoursRoutes);
 router.use("/qualifications", QualificationRoutes);
-
-router.use("/departments", DepartmentRoutes);
-router.use("/roles", RoleRoutes);
 
 router.use("/user-departments", UserDepartmentRoutes);
 router.use("/manager", ManagerRoutes);

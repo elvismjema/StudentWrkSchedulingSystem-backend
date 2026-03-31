@@ -14,22 +14,26 @@ import logger from "./app/config/logger.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-db.sequelize.sync({ alter: true })
-  .then(() => {
-    logger.info('Database synchronized successfully');
-    logger.info('Models in sync: ' + Object.keys(db).filter(key => typeof db[key] === 'object' && db[key] !== null && 'tableName' in db[key]).join(', '));
-  })
-  .catch(err => {
-    logger.error('Error syncing database:', err);
-    process.exit(1); // Exit if we can't sync the database
-  });
+// Add missing columns that teammates may have added to models
+const addMissingColumns = async () => {
+  const columnsToAdd = [
+    { table: 'users', column: 'is_active', sql: 'ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1' },
+    { table: 'users', column: 'deactivated_at', sql: 'ADD COLUMN deactivated_at DATETIME NULL' },
+  ];
+  for (const col of columnsToAdd) {
+    try {
+      await db.sequelize.query(`ALTER TABLE ${col.table} ${col.sql}`);
+      logger.info(`Added ${col.column} column to ${col.table} table`);
+    } catch (err) {
+      // Column already exists – safe to ignore
+    }
+  }
+};
 
 import { runSeeds } from "./app/config/seed.js";
 
 
 const app = express();
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // HTTP request logger middleware
 app.use(morgan('combined', { stream: logger.stream }));
@@ -69,9 +73,10 @@ const startServer = async () => {
     await db.sequelize.authenticate();
     logger.info("Database connection established");
     
-    // Sync schema – alter:true adds missing columns (safe for adding new fields)
-    // TODO: revert to sync() after request_status column is confirmed on deployed DB
-    await db.sequelize.sync({ alter: true });
+    // Add any missing columns before syncing
+    await addMissingColumns();
+    
+    await db.sequelize.sync();
     logger.info("Database schema synchronized");
 
     // Seed essential data (uses findOrCreate, safe to run every startup)
