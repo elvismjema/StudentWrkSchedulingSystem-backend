@@ -1,3 +1,4 @@
+
 import { Router } from "express";
 import authenticate from "../authorization/authorization.js";
 import {
@@ -5,24 +6,24 @@ import {
   getDepartmentById,
   createDepartment,
   updateDepartment,
-  deleteDepartment,
-  listDepartments,
-  removeAllDepartments
+  deleteDepartment
 } from "../controllers/department.controller.js";
-import { verifyToken } from "../middleware/authJwt.js";
-import requireManager from "../authorization/requireManager.js";
-import requireDepartmentManager from "../authorization/requireDepartmentManager.js";
 
 const router = Router();
 
-// Get all departments - available to authenticated users
-router.get("/", [verifyToken], listDepartments);
-router.get("/:id", [verifyToken], getDepartmentById);
+// Get all departments
+router.get("/", authenticate, getAllDepartments);
 
-// Manager routes
-router.post("/", [verifyToken, requireManager], createDepartment);
-router.put("/:id", [verifyToken, requireManager, requireDepartmentManager], updateDepartment);
-router.delete("/:id", [verifyToken, requireManager, requireDepartmentManager], deleteDepartment);
-router.delete("/", [verifyToken, requireManager], removeAllDepartments);
+// Get single department by ID
+router.get("/:id", authenticate, getDepartmentById);
+
+// Create new department
+router.post("/", authenticate, createDepartment);
+
+// Update department
+router.put("/:id", authenticate, updateDepartment);
+
+// Delete department
+router.delete("/:id", authenticate, deleteDepartment);
 
 export default router;
