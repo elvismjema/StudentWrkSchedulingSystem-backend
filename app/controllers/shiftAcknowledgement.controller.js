@@ -1,5 +1,6 @@
 import db from "../models/index.js";
 import logger from "../config/logger.js";
+import { resolveHighestRoleForUser } from "../authorization/roleAccess.js";
 
 const ShiftAcknowledgement = db.shiftAcknowledgement;
 const Shift = db.shift;
@@ -52,7 +53,7 @@ exports.findAll = (req, res) => {
   const acknowledged = req.query.acknowledged;
 
   let condition = {};
-  
+
   if (shiftId) {
     condition.shiftId = shiftId;
   }
@@ -65,7 +66,7 @@ exports.findAll = (req, res) => {
 
   logger.debug(`Fetching shift acknowledgements with condition: ${JSON.stringify(condition)}`);
 
-  ShiftAcknowledgement.findAll({ 
+  ShiftAcknowledgement.findAll({
     where: condition,
     include: [
       {
@@ -97,7 +98,7 @@ exports.findAll = (req, res) => {
 exports.findAllUnacknowledged = (req, res) => {
   logger.debug('Fetching all unacknowledged shift acknowledgements');
 
-  ShiftAcknowledgement.findAll({ 
+  ShiftAcknowledgement.findAll({
     where: { acknowledged: false },
     include: [
       {
@@ -131,7 +132,7 @@ exports.findAllForUser = (req, res) => {
 
   logger.debug(`Fetching shift acknowledgements for user: ${userId}`);
 
-  ShiftAcknowledgement.findAll({ 
+  ShiftAcknowledgement.findAll({
     where: { userId: userId },
     include: [
       {
@@ -160,7 +161,7 @@ exports.findAllForShift = (req, res) => {
 
   logger.debug(`Fetching shift acknowledgements for shift: ${shiftId}`);
 
-  ShiftAcknowledgement.findAll({ 
+  ShiftAcknowledgement.findAll({
     where: { shiftId: shiftId },
     include: [
       {
@@ -238,7 +239,7 @@ exports.update = (req, res) => {
         });
       } else {
         logger.warn(`Cannot update shift acknowledgement with id ${id}. Acknowledgement not found or req.body is empty`);
-        res.send({
+        res.status(404).send({
           message: `Cannot update Shift Acknowledgement with id=${id}. Maybe Shift Acknowledgement was not found or req.body is empty!`,
         });
       }
@@ -251,70 +252,93 @@ exports.update = (req, res) => {
     });
 };
 
-// Acknowledge a shift (set acknowledged to true)
-exports.acknowledge = (req, res) => {
+/**
+ * Acknowledge a shift (set acknowledged to true).
+ * FIX: Added ownership validation — students can only acknowledge their own shifts.
+ */
+exports.acknowledge = async (req, res) => {
   const id = req.params.id;
 
   logger.debug(`Acknowledging shift acknowledgement: ${id}`);
 
-  const updateData = {
-    acknowledged: true,
-    acknowledgedAt: new Date(),
-  };
+  try {
+    const acknowledgement = await ShiftAcknowledgement.findByPk(id);
+    if (!acknowledgement) {
+      return res.status(404).send({
+        message: `Shift Acknowledgement with id=${id} was not found.`,
+      });
+    }
 
-  ShiftAcknowledgement.update(updateData, {
-    where: { id: id },
-  })
-    .then((num) => {
-      if (num == 1) {
-        logger.info(`Shift acknowledged successfully: ${id}`);
-        res.send({
-          message: "Shift was acknowledged successfully.",
-        });
-      } else {
-        logger.warn(`Cannot acknowledge shift with id ${id}`);
-        res.send({
-          message: `Cannot acknowledge Shift with id=${id}. Maybe Shift Acknowledgement was not found!`,
+    // Ownership check: students can only acknowledge their own shifts
+    const authUserId = Number(req.auth?.userId);
+    if (acknowledgement.userId !== authUserId) {
+      const role = await resolveHighestRoleForUser(authUserId, req.auth?.email);
+      if (role !== "manager" && role !== "admin") {
+        return res.status(403).send({
+          message: "Forbidden! You can only acknowledge your own shifts.",
         });
       }
-    })
-    .catch((err) => {
-      logger.error(`Error acknowledging shift ${id}: ${err.message}`);
-      res.status(500).send({
-        message: `Error acknowledging Shift with id=${id}`,
-      });
+    }
+
+    acknowledgement.acknowledged = true;
+    acknowledgement.acknowledgedAt = new Date();
+    await acknowledgement.save();
+
+    logger.info(`Shift acknowledged successfully: ${id}`);
+    res.send({
+      message: "Shift was acknowledged successfully.",
+      data: acknowledgement,
     });
+  } catch (err) {
+    logger.error(`Error acknowledging shift ${id}: ${err.message}`);
+    res.status(500).send({
+      message: `Error acknowledging Shift with id=${id}`,
+    });
+  }
 };
 
-// Mark shift as imported to calendar
-exports.markCalendarImported = (req, res) => {
+/**
+ * Mark shift as imported to calendar.
+ * FIX: Added ownership validation — students can only mark their own.
+ */
+exports.markCalendarImported = async (req, res) => {
   const id = req.params.id;
 
   logger.debug(`Marking shift acknowledgement ${id} as imported to calendar`);
 
-  ShiftAcknowledgement.update(
-    { importedToCalendar: true },
-    { where: { id: id } }
-  )
-    .then((num) => {
-      if (num == 1) {
-        logger.info(`Shift marked as imported to calendar: ${id}`);
-        res.send({
-          message: "Shift was marked as imported to calendar successfully.",
-        });
-      } else {
-        logger.warn(`Cannot mark shift ${id} as imported to calendar`);
-        res.send({
-          message: `Cannot mark Shift with id=${id} as imported. Maybe Shift Acknowledgement was not found!`,
+  try {
+    const acknowledgement = await ShiftAcknowledgement.findByPk(id);
+    if (!acknowledgement) {
+      return res.status(404).send({
+        message: `Shift Acknowledgement with id=${id} was not found.`,
+      });
+    }
+
+    // Ownership check
+    const authUserId = Number(req.auth?.userId);
+    if (acknowledgement.userId !== authUserId) {
+      const role = await resolveHighestRoleForUser(authUserId, req.auth?.email);
+      if (role !== "manager" && role !== "admin") {
+        return res.status(403).send({
+          message: "Forbidden! You can only mark your own shifts as imported.",
         });
       }
-    })
-    .catch((err) => {
-      logger.error(`Error marking shift ${id} as imported: ${err.message}`);
-      res.status(500).send({
-        message: `Error marking Shift with id=${id} as imported`,
-      });
+    }
+
+    acknowledgement.importedToCalendar = true;
+    await acknowledgement.save();
+
+    logger.info(`Shift marked as imported to calendar: ${id}`);
+    res.send({
+      message: "Shift was marked as imported to calendar successfully.",
+      data: acknowledgement,
     });
+  } catch (err) {
+    logger.error(`Error marking shift ${id} as imported: ${err.message}`);
+    res.status(500).send({
+      message: `Error marking Shift with id=${id} as imported`,
+    });
+  }
 };
 
 // Delete a Shift Acknowledgement with the specified id
@@ -334,7 +358,7 @@ exports.delete = (req, res) => {
         });
       } else {
         logger.warn(`Cannot delete shift acknowledgement with id ${id}. Acknowledgement not found`);
-        res.send({
+        res.status(404).send({
           message: `Cannot delete Shift Acknowledgement with id=${id}. Maybe Shift Acknowledgement was not found!`,
         });
       }

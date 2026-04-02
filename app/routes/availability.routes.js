@@ -1,8 +1,9 @@
 import availability from "../controllers/availability.controller.js";
 import authenticate from "../authorization/authorization.js";
+import requireAdmin from "../authorization/requireAdmin.js";
 import { Router } from "express";
 
-var router = Router();
+const router = Router();
 
 // Create a new Availability
 router.post("/", [authenticate], availability.create);
@@ -25,7 +26,7 @@ router.patch("/:id/status", [authenticate], availability.updateStatus);
 // Delete an Availability with id
 router.delete("/:id", [authenticate], availability.delete);
 
-// Delete all Availabilities
-router.delete("/", [authenticate], availability.deleteAll);
+// FIX: Delete all Availabilities — restricted to admin only
+router.delete("/", [authenticate, requireAdmin], availability.deleteAll);
 
 export default router;
