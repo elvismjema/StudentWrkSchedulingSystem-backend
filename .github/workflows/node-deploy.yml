@@ -42,6 +42,8 @@ jobs:
           if [ -z "${DB_PORT}" ]; then DB_PORT="3306"; fi
           PORT="${{ secrets.PORT }}"
           if [ -z "${PORT}" ]; then PORT="3132"; fi
+          CORS_ORIGIN="${{ secrets.CORS_ORIGIN }}"
+          if [ -z "${CORS_ORIGIN}" ]; then CORS_ORIGIN="http://localhost:8081,https://workerscheduling.eaglesoftwareteam.com"; fi
           cat <<EOF > .env
           DB_HOST=${{ secrets.AWS_DB_HOST }}
           DB_PORT=${DB_PORT}
@@ -50,6 +52,7 @@ jobs:
           DB_NAME=${{ secrets.AWS_DB_NAME }}
           CLIENT_ID=${{ secrets.CLIENT_ID }}
           CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}
+          CORS_ORIGIN=${CORS_ORIGIN}
           PORT=${PORT}
           EOF
 
