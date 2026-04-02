@@ -1,43 +1,53 @@
-import Sequelize from "sequelize";
+import { DataTypes } from "sequelize";
 import SequelizeInstance from "../config/sequelizeInstance.js";
 
 const ClockRecord = SequelizeInstance.define(
-  "clock_record",
+  "ClockRecord",
   {
-    id: {
-      type: Sequelize.INTEGER,
+    clock_id: {
+      type: DataTypes.INTEGER,
       autoIncrement: true,
       primaryKey: true,
+      field: "clock_id"
     },
-    userId: {
-      type: Sequelize.INTEGER,
+    user_id: {
+      type: DataTypes.INTEGER,
       allowNull: false,
+      field: "user_id"
     },
-    shiftId: {
-      type: Sequelize.INTEGER,
-      allowNull: true,
-    },
-    clockIn: {
-      type: Sequelize.DATE,
+    clock_in: {
+      type: DataTypes.DATE,
       allowNull: false,
+      field: "clock_in"
     },
-    clockOut: {
-      type: Sequelize.DATE,
+    clock_out: {
+      type: DataTypes.DATE,
       allowNull: true,
+      field: "clock_out"
     },
-    status: {
-      type: Sequelize.ENUM("clocked_in", "clocked_out", "missed", "adjusted"),
+    shift_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: "shift_id"
+    },
+    created_at: {
+      type: DataTypes.DATE,
       allowNull: false,
-      defaultValue: "clocked_in",
+      defaultValue: DataTypes.NOW,
+      field: "created_at"
     },
-    notes: {
-      type: Sequelize.TEXT,
-      allowNull: true,
-    },
+    updated_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: DataTypes.NOW,
+      field: "updated_at"
+    }
   },
   {
     tableName: "clock_records",
-  },
+    timestamps: false,
+    underscored: true
+  }
 );
 
 export default ClockRecord;

@@ -1,22 +1,41 @@
-import userDepartments from "../controllers/user_department.controller.js";
+import userDepartment from "../controllers/user_department.controller.js";
 import authenticate from "../authorization/authorization.js";
+import requireManager from "../authorization/requireManager.js";
 import { Router } from "express";
 
 var router = Router();
 
-// Create a new User_Department
-router.post("/", [authenticate], userDepartments.create);
+// List available departments for joining
+router.get("/departments", [authenticate], userDepartment.listAvailableDepartments);
 
-// Retrieve all User_Departments
-router.get("/", [authenticate], userDepartments.findAll);
+// Submit a department join request
+router.post("/", [authenticate], userDepartment.submitJoinRequest);
 
-// Retrieve a single User_Department with id
-router.get("/:id", [authenticate], userDepartments.findOne);
+// List all departments for a specific user
+router.get("/user/:userId", [authenticate], userDepartment.listUserDepartments);
 
-// Update a User_Department with id
-router.put("/:id", [authenticate], userDepartments.update);
+// Leave a department (deactivate membership)
+router.put("/leave/:id", [authenticate], userDepartment.leaveDepar);
 
-// Delete a User_Department with id
-router.delete("/:id", [authenticate], userDepartments.delete);
+// Manager: Get pending join requests for managed departments
+router.get("/pending", [authenticate, requireManager], userDepartment.getPendingRequests);
+
+// Manager: Approve a join request
+router.put("/approve/:id", [authenticate, requireManager], userDepartment.approveJoinRequest);
+
+// Manager: Reject a join request
+router.put("/reject/:id", [authenticate, requireManager], userDepartment.rejectJoinRequest);
+
+// Admin: Get all users with their roles
+router.get("/admin/users-with-roles", [authenticate, requireManager], userDepartment.getAllUsersWithRoles);
+
+// Admin: Assign or update user role
+router.post("/admin/assign-role", [authenticate, requireManager], userDepartment.assignUserRole);
+
+// Admin: Remove user role from department
+router.delete("/admin/remove-role/:id", [authenticate, requireManager], userDepartment.removeUserRole);
+
+// Get user's active roles across all departments
+router.get("/roles/:userId", [authenticate], userDepartment.getUserRoles);
 
 export default router;
