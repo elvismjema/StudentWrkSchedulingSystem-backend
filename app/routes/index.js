@@ -25,6 +25,9 @@ import ManagerRoutes from "./manager.routes.js";
 import AdminRoutes from "./admin.routes.js";
 import ScheduleTemplateRoutes from "./schedule_template.routes.js";
 
+// ── NEW: Student Dashboard Routes ────────────────────────────────────────────
+import StudentRoutes from "./student.routes.js";
+
 
 const router = Router();
 
@@ -53,6 +56,9 @@ router.use("/user-departments", UserDepartmentRoutes);
 router.use("/manager", ManagerRoutes);
 router.use("/admin", AdminRoutes);
 router.use("/schedule-templates", ScheduleTemplateRoutes);
+
+// ── NEW: Student Dashboard ───────────────────────────────────────────────────
+router.use("/student", StudentRoutes);
 
 
 export default router;

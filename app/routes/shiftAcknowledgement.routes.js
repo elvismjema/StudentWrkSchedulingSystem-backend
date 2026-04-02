@@ -1,8 +1,9 @@
 import shiftAcknowledgement from "../controllers/shiftAcknowledgement.controller.js";
 import authenticate from "../authorization/authorization.js";
+import requireAdmin from "../authorization/requireAdmin.js";
 import { Router } from "express";
 
-var router = Router();
+const router = Router();
 
 // Create a new Shift Acknowledgement
 router.post("/", [authenticate], shiftAcknowledgement.create);
@@ -34,7 +35,7 @@ router.patch("/:id/calendar-import", [authenticate], shiftAcknowledgement.markCa
 // Delete a Shift Acknowledgement with id
 router.delete("/:id", [authenticate], shiftAcknowledgement.delete);
 
-// Delete all Shift Acknowledgements
-router.delete("/", [authenticate], shiftAcknowledgement.deleteAll);
+// FIX: Delete all Shift Acknowledgements — restricted to admin only
+router.delete("/", [authenticate, requireAdmin], shiftAcknowledgement.deleteAll);
 
 export default router;
