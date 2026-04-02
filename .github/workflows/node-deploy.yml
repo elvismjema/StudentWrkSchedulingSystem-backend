@@ -1,0 +1,82 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate env vars
+        run: |
+          if [ -z "${DB_HOST}" ] || [ -z "${DB_USER}" ] || [ -z "${DB_PW}" ] || [ -z "${DB_NAME}" ] || [ -z "${CLIENT_ID}" ] || [ -z "${CLIENT_SECRET}" ]; then
+            echo "Missing one or more required secrets"; exit 1;
+          fi
+        env:
+          DB_HOST: ${{ secrets.AWS_DB_HOST }}
+          DB_PORT: ${{ secrets.AWS_DB_PORT }}
+          DB_USER: ${{ secrets.AWS_DB_USER }}
+          DB_PW: ${{ secrets.AWS_DB_PW }}
+          DB_NAME: ${{ secrets.AWS_DB_NAME }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+
+      - name: Write production env
+        run: |
+          DB_PORT="${{ secrets.AWS_DB_PORT }}"
+          if [ -z "${DB_PORT}" ]; then DB_PORT="3306"; fi
+          PORT="${{ secrets.PORT }}"
+          if [ -z "${PORT}" ]; then PORT="3132"; fi
+          cat <<EOF > .env
+          DB_HOST=${{ secrets.AWS_DB_HOST }}
+          DB_PORT=${DB_PORT}
+          DB_USER=${{ secrets.AWS_DB_USER }}
+          DB_PW=${{ secrets.AWS_DB_PW }}
+          DB_NAME=${{ secrets.AWS_DB_NAME }}
+          CLIENT_ID=${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}
+          PORT=${PORT}
+          EOF
+
+      - name: Bundle deploy artifacts
+        run: npm run bundle
+
+      - name: Deploy to server
+        uses: easingthemes/ssh-deploy@v4.1.10
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          ARGS: "-rltgoDzvO --delete"
+          SOURCE: "deploy/"
+          REMOTE_HOST: "workerscheduling.eaglesoftwareteam.com"
+          REMOTE_USER: "ubuntu"
+          TARGET: "/home/ubuntu/nodeapps/sev2026/t2"
+
+      - name: Install + restart service
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: workerscheduling.eaglesoftwareteam.com
+          username: ubuntu
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+            cd /home/ubuntu/nodeapps/sev2026/t2
+            npm ci --omit=dev
+            sudo cp workerscheduling-t2-backend.service /etc/systemd/system/workerscheduling-t2-backend.service
+            sudo systemctl daemon-reload
+            sudo systemctl enable workerscheduling-t2-backend
+            sudo systemctl restart workerscheduling-t2-backend
