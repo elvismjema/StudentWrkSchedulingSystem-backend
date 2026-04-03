@@ -19,6 +19,27 @@ const addMissingColumns = async () => {
   const columnsToAdd = [
     { table: 'users', column: 'is_active', sql: 'ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1' },
     { table: 'users', column: 'deactivated_at', sql: 'ADD COLUMN deactivated_at DATETIME NULL' },
+    { table: 'positions', column: 'is_critical', sql: "ADD COLUMN is_critical TINYINT(1) NOT NULL DEFAULT 0" },
+    {
+      table: 'user_departments',
+      column: 'request_status',
+      sql: "ADD COLUMN request_status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending'",
+    },
+    {
+      table: 'notifications',
+      column: 'type',
+      sql: "ADD COLUMN type ENUM('shift_assignment','shift_change','shift_cancellation','shift_reassignment','shift_reminder','coverage_gap','availability_conflict','schedule_published') NULL DEFAULT NULL",
+    },
+    {
+      table: 'notifications',
+      column: 'link',
+      sql: "ADD COLUMN link VARCHAR(500) NULL DEFAULT NULL",
+    },
+    {
+      table: 'notifications',
+      column: 'priority',
+      sql: "ADD COLUMN priority ENUM('normal','high') NOT NULL DEFAULT 'normal'",
+    },
   ];
   for (const col of columnsToAdd) {
     try {
@@ -38,11 +59,37 @@ const app = express();
 // HTTP request logger middleware
 app.use(morgan('combined', { stream: logger.stream }));
 
+const parseAllowedOrigins = () => {
+  const configuredOrigins = process.env.CORS_ORIGIN || "";
+  const defaults = [
+    "http://localhost:8081",
+    "https://workerscheduling.eaglesoftwareteam.com",
+  ];
+
+  if (!configuredOrigins.trim()) {
+    return defaults;
+  }
+
+  return configuredOrigins
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+};
+
+const allowedOrigins = parseAllowedOrigins();
+
 // CORS configuration with preflight support
 var corsOptions = {
-  origin: "http://localhost:8081",
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    callback(new Error(`Blocked by CORS: ${origin}`));
+  },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   optionsSuccessStatus: 200 // Some legacy browsers (IE11, various SmartTVs) choke on 204
 }

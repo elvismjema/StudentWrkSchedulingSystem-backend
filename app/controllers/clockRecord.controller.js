@@ -266,7 +266,9 @@ export const getMyOpenClockRecord = async (req, res) => {
     });
 
     if (!openRecord) {
-      return res.status(404).send({
+      return res.send({
+        success: true,
+        data: null,
         message: "No open clock record found.",
       });
     }

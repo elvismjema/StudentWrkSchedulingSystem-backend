@@ -19,6 +19,25 @@ const createSessionToken = () => {
   return randomBytes(48).toString("hex");
 };
 
+const buildAuthenticatedUserResponse = async (sessionAuth) => {
+  const user = await User.findByPk(sessionAuth.userId);
+
+  if (!user) {
+    return null;
+  }
+
+  const assignedRole = await resolveHighestRoleForUser(user.id, user.email);
+
+  return {
+    email: user.email,
+    fName: user.fName,
+    lName: user.lName,
+    role: assignedRole,
+    userId: user.id,
+    token: sessionAuth.token,
+  };
+};
+
 const httpsRequestJson = (url, { method = "GET", headers = {}, body } = {}) =>
   new Promise((resolve, reject) => {
     const req = https.request(url, { method, headers }, (res) => {
@@ -390,7 +409,15 @@ exports.login = async (req, res) => {
 };
 
 exports.authorize = async (req, res) => {
-  logger.info(`Authorization request for user: ${req.params.id}`);
+  const userId = req.params.id || req.body?.userId || req.body?.id;
+
+  if (!userId) {
+    return res.status(400).send({
+      message: "User id is required to authorize Google tokens.",
+    });
+  }
+
+  logger.info(`Authorization request for user: ${userId}`);
 
   let tokens;
   try {
@@ -406,7 +433,7 @@ exports.authorize = async (req, res) => {
 
   await User.findOne({
     where: {
-      id: req.params.id,
+      id: userId,
     },
   })
     .then((data) => {
@@ -414,9 +441,9 @@ exports.authorize = async (req, res) => {
         user = data.dataValues;
         logger.debug(`User found for authorization: ${user.email}`);
       } else {
-        logger.warn(`User not found for authorization: ${req.params.id}`);
+        logger.warn(`User not found for authorization: ${userId}`);
         res.status(404).send({ 
-          message: `User with id ${req.params.id} not found` 
+          message: `User with id ${userId} not found` 
         });
         return;
       }
@@ -462,7 +489,9 @@ exports.authorize = async (req, res) => {
 exports.logout = async (req, res) => {
   logger.info('Logout request received');
   
-  if (req.body === null) {
+  const token = req.body?.token;
+
+  if (!token) {
     logger.warn('Logout attempt with null body');
     res.send({
       message: "User has already been successfully logged out!",
@@ -474,7 +503,7 @@ exports.logout = async (req, res) => {
   let session = {};
 
   logger.debug('Looking up session for logout');
-  await Session.findAll({ where: { token: req.body.token } })
+  await Session.findAll({ where: { token } })
     .then((data) => {
       if (data[0] !== undefined) {
         session = data[0].dataValues;
@@ -518,6 +547,25 @@ exports.logout = async (req, res) => {
     logger.warn('Logout attempt for already logged out user');
     res.send({
       message: "User has already been successfully logged out!",
+    });
+  }
+};
+
+exports.me = async (req, res) => {
+  try {
+    const userInfo = await buildAuthenticatedUserResponse(req.auth);
+
+    if (!userInfo) {
+      return res.status(404).send({
+        message: "Authenticated user was not found.",
+      });
+    }
+
+    return res.send(userInfo);
+  } catch (err) {
+    logger.error(`Error retrieving current user: ${err.message}`);
+    return res.status(500).send({
+      message: "Error retrieving current user.",
     });
   }
 };
