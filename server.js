@@ -25,6 +25,21 @@ const addMissingColumns = async () => {
       column: 'request_status',
       sql: "ADD COLUMN request_status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending'",
     },
+    {
+      table: 'notifications',
+      column: 'type',
+      sql: "ADD COLUMN type ENUM('shift_assignment','shift_change','shift_cancellation','shift_reassignment','shift_reminder','coverage_gap','availability_conflict','schedule_published') NULL DEFAULT NULL",
+    },
+    {
+      table: 'notifications',
+      column: 'link',
+      sql: "ADD COLUMN link VARCHAR(500) NULL DEFAULT NULL",
+    },
+    {
+      table: 'notifications',
+      column: 'priority',
+      sql: "ADD COLUMN priority ENUM('normal','high') NOT NULL DEFAULT 'normal'",
+    },
   ];
   for (const col of columnsToAdd) {
     try {

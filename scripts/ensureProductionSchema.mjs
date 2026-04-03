@@ -35,6 +35,39 @@ const main = async () => {
     }),
   );
 
+  appliedChanges += Number(
+    await ensureColumn("notifications", "type", {
+      type: DataTypes.ENUM(
+        "shift_assignment",
+        "shift_change",
+        "shift_cancellation",
+        "shift_reassignment",
+        "shift_reminder",
+        "coverage_gap",
+        "availability_conflict",
+        "schedule_published",
+      ),
+      allowNull: true,
+      defaultValue: null,
+    }),
+  );
+
+  appliedChanges += Number(
+    await ensureColumn("notifications", "link", {
+      type: DataTypes.STRING(500),
+      allowNull: true,
+      defaultValue: null,
+    }),
+  );
+
+  appliedChanges += Number(
+    await ensureColumn("notifications", "priority", {
+      type: DataTypes.ENUM("normal", "high"),
+      allowNull: false,
+      defaultValue: "normal",
+    }),
+  );
+
   console.log(`schema sync complete: ${appliedChanges} change(s) applied`);
 };
 
