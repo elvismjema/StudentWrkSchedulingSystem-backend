@@ -59,35 +59,9 @@ const app = express();
 // HTTP request logger middleware
 app.use(morgan('combined', { stream: logger.stream }));
 
-const parseAllowedOrigins = () => {
-  const configuredOrigins = process.env.CORS_ORIGIN || "";
-  const defaults = [
-    "http://localhost:8081",
-    "https://workerscheduling.eaglesoftwareteam.com",
-  ];
-
-  if (!configuredOrigins.trim()) {
-    return defaults;
-  }
-
-  return configuredOrigins
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-};
-
-const allowedOrigins = parseAllowedOrigins();
-
 // CORS configuration with preflight support
 var corsOptions = {
-  origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-      return;
-    }
-
-    callback(new Error(`Blocked by CORS: ${origin}`));
-  },
+  origin: process.env.CORS_ORIGIN || "https://workerscheduling.eaglesoftwareteam.com",
   credentials: true,
   methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
@@ -108,9 +82,9 @@ app.use(express.urlencoded({ extended: true }));
 
 // Serve static files from uploads directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-  
+
 // Load the routes from the routes folder
-app.use("/workerscheduling-t2", routes); 
+app.use("/workerscheduling-t2", routes);
 
 
 // set port, listen for requests
@@ -119,10 +93,10 @@ const startServer = async () => {
   try {
     await db.sequelize.authenticate();
     logger.info("Database connection established");
-    
+
     // Add any missing columns before syncing
     await addMissingColumns();
-    
+
     await db.sequelize.sync();
     logger.info("Database schema synchronized");
 
