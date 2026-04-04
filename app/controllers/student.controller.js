@@ -323,7 +323,7 @@ export const getMySchedule = async (req, res) => {
           where: {
             shift_date: shift.shift_date,
             department_id: shift.department_id,
-            assigned_user_id: { [Op.ne]: userId, [Op.ne]: null },
+            assigned_user_id: { [Op.and]: [{ [Op.ne]: userId }, { [Op.ne]: null }] },
             is_published: true,
             start_time: { [Op.lt]: shift.end_time },
             end_time: { [Op.gt]: shift.start_time },
