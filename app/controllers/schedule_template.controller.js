@@ -757,19 +757,6 @@ export const publishTemplate = async (req, res) => {
 
     const templateShifts = await loadTemplateShifts(id);
 
-    // Block publish if any shift is missing a position — the template is still a draft
-    const unpositionedShifts = templateShifts.filter(
-      (s) => !(typeof s.toJSON === "function" ? s.toJSON() : s).position_id
-    );
-    if (unpositionedShifts.length > 0) {
-      await t.rollback();
-      return res.status(422).json({
-        success: false,
-        message: `Cannot publish: ${unpositionedShifts.length} shift(s) have no position assigned. Assign a position to every shift before publishing.`,
-        unpositioned_count: unpositionedShifts.length,
-      });
-    }
-
     // Analyse conflicts before creating shifts so we can surface them immediately
     const conflicts = await analyseConflicts(templateShifts, start_date);
 
