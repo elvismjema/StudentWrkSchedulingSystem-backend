@@ -41,6 +41,13 @@ const addMissingColumns = async () => {
       sql: "ADD COLUMN priority ENUM('normal','high') NOT NULL DEFAULT 'normal'",
     },
   ];
+  // Make position_id nullable so template shifts can be saved before a position is chosen
+  try {
+    await db.sequelize.query('ALTER TABLE shifts MODIFY COLUMN position_id INT NULL');
+    logger.info('Altered shifts.position_id to allow NULL');
+  } catch (err) {
+    // Already nullable – safe to ignore
+  }
   for (const col of columnsToAdd) {
     try {
       await db.sequelize.query(`ALTER TABLE ${col.table} ${col.sql}`);
