@@ -47,6 +47,28 @@ const loadTemplateShifts = (templateId) =>
   });
 
 /**
+ * Validate that a user has manager/supervisor/admin access to a department.
+ * Returns true if access is allowed, false otherwise.
+ */
+const validateManagerDepartmentAccess = async (userId, departmentId) => {
+  if (!userId || !departmentId) return false;
+
+  // Global admin bypasses department check
+  const user = await db.user.findByPk(userId, { attributes: ["id", "role"] });
+  if (user?.role === "admin") return true;
+
+  // Check active department membership with a manager or supervisor role
+  const membership = await db.userDepartment.findOne({
+    where: { user_id: userId, department_id: departmentId, is_active: true },
+    include: [{ model: db.role, as: "role", required: true }],
+  });
+
+  if (!membership) return false;
+  const roleName = String(membership.role?.role_name || "").toLowerCase();
+  return roleName.includes("manager") || roleName.includes("supervisor");
+};
+
+/**
  * Return all active manager user IDs for a department.
  */
 const getDepartmentManagerIds = async (departmentId) => {
@@ -311,6 +333,15 @@ export const createScheduleTemplate = async (req, res) => {
       });
     }
 
+    const canAccess = await validateManagerDepartmentAccess(actorUserId, department_id);
+    if (!canAccess) {
+      await t.rollback();
+      return res.status(403).json({
+        success: false,
+        message: "You do not have manager access to this department",
+      });
+    }
+
     const validRecurrenceTypes = ["weekly", "biweekly", "monthly"];
     if (!validRecurrenceTypes.includes(recurrence_type)) {
       await t.rollback();
@@ -432,6 +463,15 @@ export const updateScheduleTemplate = async (req, res) => {
       return res.status(404).json({ success: false, message: "Schedule template not found" });
     }
 
+    const canAccess = await validateManagerDepartmentAccess(actorUserId, template.department_id);
+    if (!canAccess) {
+      await t.rollback();
+      return res.status(403).json({
+        success: false,
+        message: "You do not have manager access to this department",
+      });
+    }
+
     if (template_name !== undefined) template.template_name = template_name;
     if (department_id !== undefined) template.department_id = department_id;
     if (is_active !== undefined) template.is_active = is_active;
@@ -516,12 +556,22 @@ export const setScheduleTemplateActiveStatus = async (req, res) => {
 export const deleteScheduleTemplate = async (req, res) => {
   const t = await db.sequelize.transaction();
   try {
+    const actorUserId = req.auth?.userId;
     const { id } = req.params;
 
     const template = await db.scheduleTemplate.findByPk(id);
     if (!template) {
       await t.rollback();
       return res.status(404).json({ success: false, message: "Schedule template not found" });
+    }
+
+    const canAccess = await validateManagerDepartmentAccess(actorUserId, template.department_id);
+    if (!canAccess) {
+      await t.rollback();
+      return res.status(403).json({
+        success: false,
+        message: "You do not have manager access to this department",
+      });
     }
 
     // Destroy template shifts first; DB cascade removes their ShiftTasks
