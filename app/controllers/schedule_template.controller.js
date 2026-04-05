@@ -266,16 +266,15 @@ const createTemplateShifts = async (templateId, departmentId, createdBy, shifts,
       shift.day_of_week === undefined ||
       shift.day_of_week === null ||
       !shift.start_time ||
-      !shift.end_time ||
-      !shift.position_id
+      !shift.end_time
     ) {
-      continue; // skip incomplete rows
+      continue; // skip rows that are missing required time fields
     }
 
     const newShift = await db.shift.create(
       {
         department_id: departmentId,
-        position_id: shift.position_id,
+        position_id: shift.position_id || null,
         template_id: templateId,
         day_of_week: shift.day_of_week,
         shift_date: null,
@@ -757,6 +756,19 @@ export const publishTemplate = async (req, res) => {
     }
 
     const templateShifts = await loadTemplateShifts(id);
+
+    // Block publish if any shift is missing a position — the template is still a draft
+    const unpositionedShifts = templateShifts.filter(
+      (s) => !(typeof s.toJSON === "function" ? s.toJSON() : s).position_id
+    );
+    if (unpositionedShifts.length > 0) {
+      await t.rollback();
+      return res.status(422).json({
+        success: false,
+        message: `Cannot publish: ${unpositionedShifts.length} shift(s) have no position assigned. Assign a position to every shift before publishing.`,
+        unpositioned_count: unpositionedShifts.length,
+      });
+    }
 
     // Analyse conflicts before creating shifts so we can surface them immediately
     const conflicts = await analyseConflicts(templateShifts, start_date);
