@@ -757,6 +757,20 @@ export const publishTemplate = async (req, res) => {
 
     const templateShifts = await loadTemplateShifts(id);
 
+    // Block publish if any shift has no assigned worker — workers must be assigned before
+    // shifts are sent out to employees.
+    const unassignedShifts = templateShifts.filter(
+      (s) => !(typeof s.toJSON === "function" ? s.toJSON() : s).assigned_user_id
+    );
+    if (unassignedShifts.length > 0) {
+      await t.rollback();
+      return res.status(422).json({
+        success: false,
+        message: `Cannot publish: ${unassignedShifts.length} shift(s) have no worker assigned. Assign a worker to every shift before publishing.`,
+        unassigned_count: unassignedShifts.length,
+      });
+    }
+
     // Analyse conflicts before creating shifts so we can surface them immediately
     const conflicts = await analyseConflicts(templateShifts, start_date);
 
