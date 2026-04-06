@@ -56,6 +56,33 @@ const addMissingColumns = async () => {
       // Column already exists – safe to ignore
     }
   }
+
+  // Safety: ensure timecard approvals table exists even when migrations
+  // were skipped in an environment.
+  try {
+    await db.sequelize.query(`
+      CREATE TABLE IF NOT EXISTS timecard_approvals (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        department_id INT NOT NULL,
+        period_start DATE NOT NULL,
+        period_end DATE NOT NULL,
+        status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+        decided_by INT NULL,
+        decided_at DATETIME NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_timecard_approvals_period (user_id, department_id, period_start, period_end),
+        KEY idx_timecard_approvals_user (user_id),
+        KEY idx_timecard_approvals_department (department_id),
+        KEY idx_timecard_approvals_decided_by (decided_by)
+      )
+    `);
+    logger.info("Ensured timecard_approvals table exists");
+  } catch (err) {
+    logger.error(`Failed ensuring timecard_approvals table: ${err.message}`);
+    throw err;
+  }
 };
 
 import { runSeeds } from "./app/config/seed.js";
