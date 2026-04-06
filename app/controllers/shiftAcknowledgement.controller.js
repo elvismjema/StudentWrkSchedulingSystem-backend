@@ -5,6 +5,7 @@ import { resolveHighestRoleForUser } from "../authorization/roleAccess.js";
 const ShiftAcknowledgement = db.shiftAcknowledgement;
 const Shift = db.shift;
 const User = db.user;
+const Department = db.department;
 const Op = db.Sequelize.Op;
 
 const exports = {};
@@ -138,7 +139,14 @@ exports.findAllForUser = (req, res) => {
       {
         model: Shift,
         as: 'shift',
-        attributes: ['shift_id', 'shift_date', 'start_time', 'end_time', 'department_id']
+        attributes: ['shift_id', 'shift_date', 'start_time', 'end_time', 'department_id', 'position_id'],
+        include: [
+          {
+            model: Department,
+            as: 'department',
+            attributes: ['department_id', 'department_name', 'location']
+          }
+        ]
       }
     ],
     order: [['createdAt', 'DESC']]
