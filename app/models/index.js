@@ -34,6 +34,7 @@ import PendingAssignment from "./pending_assignment.model.js";
 import ShiftSwapRequest from "./shift_swap_request.model.js";
 import TimeOffRequest from "./time_off_request.model.js";
 import BreakRecord from "./break_record.model.js";
+import TimecardApproval from "./timecard_approval.model.js";
 
 
 const db = {};
@@ -71,6 +72,7 @@ db.pendingAssignment = PendingAssignment;
 db.shiftSwapRequest = ShiftSwapRequest;
 db.timeOffRequest = TimeOffRequest;
 db.breakRecord = BreakRecord;
+db.timecardApproval = TimecardApproval;
 
 
 // foreign key for session
@@ -251,6 +253,39 @@ db.clockRecord.belongsTo(db.shift, {
 db.shift.hasMany(db.clockRecord, {
   foreignKey: "shift_id",
   as: "clockRecords"
+});
+
+db.user.hasMany(db.timecardApproval, {
+  foreignKey: "user_id",
+  as: "timecardApprovals",
+});
+
+db.timecardApproval.belongsTo(db.user, {
+  foreignKey: "user_id",
+  as: "user",
+  onDelete: "CASCADE",
+});
+
+db.department.hasMany(db.timecardApproval, {
+  foreignKey: "department_id",
+  as: "timecardApprovals",
+});
+
+db.timecardApproval.belongsTo(db.department, {
+  foreignKey: "department_id",
+  as: "department",
+  onDelete: "CASCADE",
+});
+
+db.user.hasMany(db.timecardApproval, {
+  foreignKey: "decided_by",
+  as: "decidedTimecards",
+});
+
+db.timecardApproval.belongsTo(db.user, {
+  foreignKey: "decided_by",
+  as: "decider",
+  onDelete: "SET NULL",
 });
 
 
