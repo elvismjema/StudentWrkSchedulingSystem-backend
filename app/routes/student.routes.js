@@ -20,6 +20,7 @@ import {
   createSwapRequest,
   getSwapRequests,
   respondToSwapRequest,
+  cancelSwapRequest,
   // 5. Time Off
   submitTimeOff,
   getTimeOffRequests,
@@ -62,6 +63,7 @@ router.post("/shifts/:id/find-cover", [authenticate], findCover);
 router.post("/shifts/:id/swap-request", [authenticate], createSwapRequest);
 router.get("/swap-requests", [authenticate], getSwapRequests);
 router.put("/swap-requests/:id", [authenticate], respondToSwapRequest);
+router.delete("/swap-requests/:id", [authenticate], cancelSwapRequest);
 
 // ── 5. Time Off ──────────────────────────────────────────────────────────────
 router.post("/time-off", [authenticate], submitTimeOff);
