@@ -1689,3 +1689,38 @@ export const acknowledgeShift = async (req, res) => {
     return fail(res, "Error acknowledging shift.");
   }
 };
+
+// ── 12. Cancel Swap Request ─────────────────────────────────────────────────
+
+/**
+ * DELETE /student/swap-requests/:id
+ * Allows the requester to cancel their own pending swap request.
+ */
+export const cancelSwapRequest = async (req, res) => {
+  try {
+    const userId = req.auth.userId;
+    const requestId = Number(req.params.id);
+
+    const swapReq = await ShiftSwapRequest.findByPk(requestId);
+    if (!swapReq) return fail(res, "Swap request not found.", 404);
+
+    // Only the requester can cancel
+    if (swapReq.requester_user_id !== userId) {
+      return fail(res, "You can only cancel your own requests.", 403);
+    }
+
+    // Can only cancel pending requests
+    if (!["pending", "manager_pending"].includes(swapReq.status)) {
+      return fail(res, `Cannot cancel a request with status: ${swapReq.status}`, 409);
+    }
+
+    swapReq.status = "cancelled";
+    swapReq.updated_at = new Date();
+    await swapReq.save();
+
+    return ok(res, swapReq, "Swap request cancelled.");
+  } catch (error) {
+    logger.error(`[StudentController] cancelSwapRequest error: ${error.message}`);
+    return fail(res, "Error cancelling swap request.");
+  }
+};
