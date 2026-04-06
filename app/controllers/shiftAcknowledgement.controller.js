@@ -134,7 +134,7 @@ exports.findAllForUser = (req, res) => {
   logger.debug(`Fetching shift acknowledgements for user: ${userId}`);
 
   ShiftAcknowledgement.findAll({
-    where: { userId: userId },
+    where: { userId: userId, acknowledged: false },
     include: [
       {
         model: Shift,
