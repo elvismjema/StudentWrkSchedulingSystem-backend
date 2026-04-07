@@ -44,6 +44,8 @@ import {
   // 11. Acknowledgements
   getPendingAcknowledgements,
   acknowledgeShift,
+  // 12. Coworkers
+  getShiftCoworkers,
 } from "../controllers/student.controller.js";
 
 const router = Router();
@@ -95,5 +97,8 @@ router.put("/profile", [authenticate], updateProfile);
 // ── 11. Shift Acknowledgements ───────────────────────────────────────────────
 router.get("/acknowledgements", [authenticate], getPendingAcknowledgements);
 router.put("/acknowledgements/:id", [authenticate], acknowledgeShift);
+
+// ── 12. Shift Coworkers ─────────────────────────────────────────────────────
+router.get("/shifts/:id/coworkers", [authenticate], getShiftCoworkers);
 
 export default router;
