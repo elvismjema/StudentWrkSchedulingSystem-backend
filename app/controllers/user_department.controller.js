@@ -469,6 +469,153 @@ exports.assignUserRole = async (req, res) => {
   }
 };
 
+// Manager: add an existing (or newly created) worker to a managed department.
+// If membership already exists (active or inactive), reactivate/update it instead of creating a duplicate.
+exports.assignWorker = async (req, res) => {
+  const userId = Number(req.body?.userId ?? req.body?.user_id);
+  const departmentId = Number(req.body?.departmentId ?? req.body?.department_id);
+  const positionIdRaw = req.body?.positionId ?? req.body?.position_id;
+  const positionId =
+    positionIdRaw === null || positionIdRaw === undefined || positionIdRaw === ""
+      ? null
+      : Number(positionIdRaw);
+
+  if (!userId || !departmentId) {
+    return res.status(400).send({
+      message: "userId and departmentId are required.",
+    });
+  }
+
+  try {
+    const actorUserId = req.auth?.userId;
+    const actorEmail = req.auth?.email;
+    const canManage = await canManageDepartment(actorUserId, actorEmail, departmentId);
+    if (!canManage) {
+      return res.status(403).send({
+        message: "Forbidden! You can only manage users in your departments.",
+      });
+    }
+
+    const [user, department] = await Promise.all([
+      db.user.findByPk(userId),
+      Department.findByPk(departmentId),
+    ]);
+
+    if (!user) {
+      return res.status(404).send({
+        message: `User with id=${userId} not found.`,
+      });
+    }
+
+    if (!department) {
+      return res.status(404).send({
+        message: `Department with id=${departmentId} not found.`,
+      });
+    }
+
+    if (positionId !== null) {
+      const position = await db.position.findByPk(positionId);
+      if (!position || Number(position.department_id) !== departmentId) {
+        return res.status(400).send({
+          message: "Selected position does not belong to this department.",
+        });
+      }
+    }
+
+    // Assign student-level role for this department.
+    const Op = db.Sequelize.Op;
+    const studentRole = await db.role.findOne({
+      where: {
+        department_id: departmentId,
+        [Op.or]: [
+          { permission_level: { [Op.lt]: 50 } },
+          { role_name: { [Op.like]: "%student%" } },
+          { role_name: { [Op.like]: "%worker%" } },
+        ],
+      },
+      order: [["permission_level", "ASC"], ["role_id", "ASC"]],
+    });
+
+    if (!studentRole) {
+      return res.status(404).send({
+        message: "No role configured for this department.",
+      });
+    }
+
+    let membership = await UserDepartment.findOne({
+      where: {
+        user_id: userId,
+        department_id: departmentId,
+        is_active: true,
+      },
+    });
+
+    if (!membership) {
+      membership = await UserDepartment.findOne({
+        where: {
+          user_id: userId,
+          department_id: departmentId,
+        },
+        order: [["ud_id", "DESC"]],
+      });
+    }
+
+    if (membership) {
+      membership.role_id = studentRole.role_id;
+      membership.position_id = positionId;
+      membership.is_active = true;
+      membership.request_status = "approved";
+      membership.deactivated_at = null;
+      membership.assigned_at = new Date();
+      await membership.save();
+    } else {
+      membership = await UserDepartment.create({
+        user_id: userId,
+        department_id: departmentId,
+        position_id: positionId,
+        role_id: studentRole.role_id,
+        is_active: true,
+        request_status: "approved",
+        assigned_at: new Date(),
+      });
+    }
+
+    const hydratedMembership = await UserDepartment.findByPk(membership.ud_id, {
+      include: [
+        {
+          model: db.department,
+          as: "department",
+          attributes: ["department_id", "department_name"],
+        },
+        {
+          model: db.role,
+          as: "role",
+          attributes: ["role_id", "role_name", "permission_level"],
+        },
+        {
+          model: db.position,
+          as: "position",
+          attributes: ["position_id", "position_name"],
+        },
+        {
+          model: db.user,
+          as: "user",
+          attributes: ["id", "fName", "lName", "email"],
+        },
+      ],
+    });
+
+    return res.status(200).send({
+      message: "Worker assigned to department successfully.",
+      data: hydratedMembership,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err.message || "Some error occurred while assigning worker to department.",
+    });
+  }
+};
+
 // Get current user's active roles across all departments
 exports.getUserRoles = async (req, res) => {
   const userId = req.params.userId;
