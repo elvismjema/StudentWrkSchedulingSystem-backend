@@ -1690,6 +1690,52 @@ export const acknowledgeShift = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/student/shifts/:id/coworkers
+ *
+ * Get coworkers for a specific shift (same department, same date, overlapping time).
+ *
+ * @param {import("express").Request} req
+ * @param {import("express").Response} res
+ */
+export const getShiftCoworkers = async (req, res) => {
+  try {
+    const userId = req.auth.userId;
+    const shiftId = Number(req.params.id);
+
+    const shift = await Shift.findByPk(shiftId);
+    if (!shift) return fail(res, "Shift not found.", 404);
+
+    const coworkers = await Shift.findAll({
+      where: {
+        shift_date: shift.shift_date,
+        department_id: shift.department_id,
+        assigned_user_id: { [Op.and]: [{ [Op.ne]: userId }, { [Op.ne]: null }] },
+        is_published: true,
+        start_time: { [Op.lt]: shift.end_time },
+        end_time: { [Op.gt]: shift.start_time },
+      },
+      include: [
+        { model: User, as: "assignedUser", attributes: ["id", "fName", "lName"] },
+      ],
+      attributes: ["shift_id", "start_time", "end_time"],
+    });
+
+    const data = coworkers.map((c) => ({
+      userId: c.assignedUser?.id,
+      name: c.assignedUser ? `${c.assignedUser.fName} ${c.assignedUser.lName}` : null,
+      startTime: c.start_time,
+      endTime: c.end_time,
+      shiftId: c.shift_id,
+    }));
+
+    return ok(res, data);
+  } catch (error) {
+    logger.error(`[StudentController] getShiftCoworkers error: ${error.message}`);
+    return fail(res, "Error retrieving coworkers.");
+  }
+};
+
 // ── 12. Cancel Swap Request ─────────────────────────────────────────────────
 
 /**
