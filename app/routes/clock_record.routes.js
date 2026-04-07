@@ -10,6 +10,7 @@ import {
   getManagerTimecardDetail,
   updateManagerTimecardStatus,
   approveAllManagerTimecards,
+  getManagerLiveAttendance,
 } from "../controllers/clockRecord.controller.js";
 
 const router = Router();
@@ -18,6 +19,7 @@ router.post("/clock-in", [authenticate], clockIn);
 router.patch("/:id/clock-out", [authenticate], clockOut);
 router.get("/me", [authenticate], getMyClockRecords);
 router.get("/me/open", [authenticate], getMyOpenClockRecord);
+router.get("/manager/live-attendance", [authenticate, requireManager], getManagerLiveAttendance);
 router.get("/manager/timecards", [authenticate, requireManager], getManagerTimecards);
 router.get("/manager/timecards/:userId", [authenticate, requireManager], getManagerTimecardDetail);
 router.patch("/manager/timecards/:userId/status", [authenticate, requireManager], updateManagerTimecardStatus);

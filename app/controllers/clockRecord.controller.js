@@ -486,6 +486,63 @@ export const getMyOpenClockRecord = async (req, res) => {
   }
 };
 
+/**
+ * GET /clock-records/manager/live-attendance
+ *
+ * Returns all currently-clocked-in workers in the manager's departments.
+ * Useful for a real-time "Who's Working Now" dashboard widget.
+ */
+export const getManagerLiveAttendance = async (req, res) => {
+  try {
+    const scope = await resolveScopedDepartmentIds(req);
+    if (scope.error) return res.status(403).send({ message: scope.error });
+    if (!scope.departmentIds.length) {
+      return res.send({ data: [], count: 0 });
+    }
+
+    const openRecords = await ClockRecord.findAll({
+      where: { clock_out: null },
+      include: [
+        {
+          model: Shift,
+          as: "shift",
+          required: true,
+          where: { department_id: { [Op.in]: scope.departmentIds } },
+          include: [
+            { model: db.department, as: "department", attributes: ["department_id", "department_name"] },
+          ],
+        },
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "fName", "lName", "email"],
+        },
+      ],
+      order: [["clock_in", "DESC"]],
+    });
+
+    const data = openRecords.map((record) => ({
+      clock_id: record.clock_id,
+      user: record.user,
+      shift: {
+        shift_id: record.shift?.shift_id,
+        shift_date: record.shift?.shift_date,
+        start_time: record.shift?.start_time,
+        end_time: record.shift?.end_time,
+        department: record.shift?.department,
+      },
+      clock_in: record.clock_in,
+      elapsed_minutes: Math.round((Date.now() - new Date(record.clock_in).getTime()) / 60000),
+    }));
+
+    return res.send({ data, count: data.length });
+  } catch (error) {
+    return res.status(500).send({
+      message: `Error retrieving live attendance: ${error.message}`,
+    });
+  }
+};
+
 export const getManagerTimecards = async (req, res) => {
   try {
     const period = validatePeriod(req.query.period_start, req.query.period_end);
