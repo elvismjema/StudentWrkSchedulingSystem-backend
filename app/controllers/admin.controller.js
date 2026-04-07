@@ -421,7 +421,7 @@ exports.getDepartmentMembers = async (req, res) => {
 const classifyRole = (role) => {
   const roleName = String(role?.role_name || "").toLowerCase();
   const permissionLevel = Number(role?.permission_level || 0);
-  if (roleName.includes("admin") || permissionLevel >= 90) return "admin";
+  if (roleName.includes("admin") || permissionLevel >= 100) return "admin";
   if (roleName.includes("manager") || roleName.includes("supervisor") || permissionLevel >= 50) return "manager";
   return "student";
 };
@@ -643,7 +643,6 @@ exports.getDepartmentRoles = async (req, res) => {
     ];
 
     const result = [];
-    const debug = [];
     for (const template of standardRoles) {
       try {
         const [role, created] = await Role.findOrCreate({
@@ -655,27 +654,22 @@ exports.getDepartmentRoles = async (req, res) => {
             description: template.description,
           },
         });
-        debug.push({ role_name: template.role_name, status: created ? "created" : "found", role_id: role.role_id });
         result.push(role);
       } catch (innerErr) {
         // findOrCreate failed — fall back to a plain find
-        debug.push({ role_name: template.role_name, status: "findOrCreate_error", error: innerErr.message });
         const existing = await Role.findOne({
           where: { department_id: departmentId, role_name: template.role_name },
         });
         if (existing) {
-          debug.push({ role_name: template.role_name, status: "fallback_found", role_id: existing.role_id });
           result.push(existing);
-        } else {
-          debug.push({ role_name: template.role_name, status: "not_found_after_fallback" });
         }
       }
     }
 
-    // Also fetch ALL roles in DB for this dept (raw diagnostic)
-    const allRolesInDept = await Role.findAll({ where: { department_id: departmentId } });
+    // Filter out true admin-level roles (permission_level >= 100) before returning
+    const filtered = result.filter((r) => Number(r.permission_level) < 100);
 
-    return res.status(200).json({ success: true, data: result, _debug: { steps: debug, allRolesInDept } });
+    return res.status(200).json({ success: true, data: filtered });
   } catch (err) {
     logger.error(`Admin getDepartmentRoles error: ${err.message}`);
     return res.status(500).json({ success: false, message: "Failed to retrieve roles.", error: err.message });
