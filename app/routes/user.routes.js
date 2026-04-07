@@ -11,6 +11,9 @@
   // Retrieve all People
   router.get("/", [authenticate], users.findAll);
 
+  // Check if a user exists by email
+  router.get("/check-email/:email", [authenticate], users.findByEmail);
+
   // Deactivate a User account
   router.patch("/:id/deactivate", [authenticate, requireManager], users.deactivateUser);
 
@@ -25,4 +28,3 @@
 
 
   export default router;
-
