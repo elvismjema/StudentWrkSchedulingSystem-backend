@@ -91,14 +91,6 @@ const validateDepartmentMembership = async (departmentId, userId, positionId) =>
     };
   }
 
-  if (positionId && Number(membership.position_id) !== Number(positionId)) {
-    return {
-      valid: false,
-      message: "Assigned user is not qualified for this position in the department.",
-      conflictType: "qualification_mismatch",
-    };
-  }
-
   return { valid: true };
 };
 
