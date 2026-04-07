@@ -432,24 +432,55 @@ const classifyRole = (role) => {
 exports.assignDepartment = async (req, res) => {
   const userId = Number(req.body?.user_id);
   const departmentId = Number(req.body?.department_id);
-  const roleId = Number(req.body?.role_id);
+  let roleId = Number(req.body?.role_id) || null;
   const rawPositionId = req.body?.position_id;
   const positionId =
     rawPositionId == null || rawPositionId === "" ? null : Number(rawPositionId);
+  // role_name + permission_level are accepted as fallback when role_id is absent
+  const roleName = req.body?.role_name ? String(req.body.role_name).trim() : null;
+  const rolePermissionLevel = req.body?.permission_level != null ? Number(req.body.permission_level) : null;
 
-  if (!userId || !departmentId || !roleId) {
+  if (!userId || !departmentId) {
     return res.status(400).json({
       success: false,
-      message: "user_id, department_id, and role_id are required.",
+      message: "user_id and department_id are required.",
+    });
+  }
+
+  if (!roleId && !roleName) {
+    return res.status(400).json({
+      success: false,
+      message: "Either role_id or role_name must be provided.",
     });
   }
 
   try {
-    const [user, role, department] = await Promise.all([
+    // If role_id is absent, resolve (or create) the role by name for this department
+    let role;
+    let user;
+    let department;
+
+    [user, department] = await Promise.all([
       User.findByPk(userId),
-      Role.findByPk(roleId),
       Department.findByPk(departmentId),
     ]);
+
+    if (roleId) {
+      role = await Role.findByPk(roleId);
+    } else {
+      // findOrCreate using name so synthesised dropdown entries are handled
+      const [foundRole] = await Role.findOrCreate({
+        where: { department_id: departmentId, role_name: roleName },
+        defaults: {
+          department_id: departmentId,
+          role_name: roleName,
+          permission_level: rolePermissionLevel ?? 10,
+          description: null,
+        },
+      });
+      role = foundRole;
+      roleId = role.role_id;
+    }
 
     if (!user) return res.status(404).json({ success: false, message: "User not found." });
     if (!role) return res.status(404).json({ success: false, message: "Role not found." });
@@ -603,36 +634,48 @@ exports.getDepartmentRoles = async (req, res) => {
   }
 
   try {
-    // Ensure the standard Student and Manager roles exist for this department.
-    // Uses findOrCreate so it is safe to call on every request — it only inserts
-    // when a role with that name does not yet exist for the department.
+    // Ensure the standard Student and Manager roles exist for this department
+    // and build the response directly from each findOrCreate result so that
+    // a missing Manager is never silently dropped by a subsequent findAll.
     const standardRoles = [
       { role_name: "Student", permission_level: 10, description: "Student worker with basic scheduling access" },
       { role_name: "Manager", permission_level: 60, description: "Department manager with scheduling and approval permissions" },
     ];
 
+    const result = [];
     for (const template of standardRoles) {
-      await Role.findOrCreate({
-        where: { department_id: departmentId, role_name: template.role_name },
-        defaults: {
-          department_id: departmentId,
-          role_name: template.role_name,
-          permission_level: template.permission_level,
-          description: template.description,
-        },
-      });
+      try {
+        const [role, created] = await Role.findOrCreate({
+          where: { department_id: departmentId, role_name: template.role_name },
+          defaults: {
+            department_id: departmentId,
+            role_name: template.role_name,
+            permission_level: template.permission_level,
+            description: template.description,
+          },
+        });
+        logger.info(
+          `getDepartmentRoles: ${template.role_name} dept=${departmentId} role_id=${role.role_id} created=${created}`
+        );
+        result.push(role);
+      } catch (innerErr) {
+        // findOrCreate failed (e.g. unique constraint on role_name).
+        // Fall back to a plain find so we still return whichever row exists.
+        logger.warn(`getDepartmentRoles findOrCreate fallback for ${template.role_name}: ${innerErr.message}`);
+        const existing = await Role.findOne({
+          where: { department_id: departmentId, role_name: template.role_name },
+        });
+        if (existing) {
+          result.push(existing);
+        } else {
+          logger.warn(
+            `getDepartmentRoles: could not find or create ${template.role_name} for dept=${departmentId}. Skipping.`
+          );
+        }
+      }
     }
 
-    // Return all non-admin roles for this department
-    const roles = await Role.findAll({
-      where: { department_id: departmentId },
-      order: [["permission_level", "ASC"]],
-    });
-
-    // Filter out admin-level roles (permission_level >= 90) before returning
-    const filtered = roles.filter((r) => Number(r.permission_level) < 90);
-
-    return res.status(200).json({ success: true, data: filtered });
+    return res.status(200).json({ success: true, data: result });
   } catch (err) {
     logger.error(`Admin getDepartmentRoles error: ${err.message}`);
     return res.status(500).json({ success: false, message: "Failed to retrieve roles.", error: err.message });
