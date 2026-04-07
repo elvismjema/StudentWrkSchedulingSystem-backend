@@ -54,10 +54,37 @@ const seedPositions = async () => {
   }
 };
 
+const seedRoles = async () => {
+  const departments = await db.department.findAll();
+
+  const roleTemplates = [
+    { role_name: "Student", permission_level: 10, description: "Student worker with basic scheduling access" },
+    { role_name: "Manager", permission_level: 60, description: "Department manager with scheduling and approval permissions" },
+  ];
+
+  for (const dept of departments) {
+    for (const template of roleTemplates) {
+      await db.role.findOrCreate({
+        where: {
+          department_id: dept.department_id,
+          role_name: template.role_name,
+        },
+        defaults: {
+          department_id: dept.department_id,
+          role_name: template.role_name,
+          permission_level: template.permission_level,
+          description: template.description,
+        },
+      });
+    }
+  }
+};
+
 export const runSeeds = async () => {
   try {
     await seedDepartments();
     await seedPositions();
+    await seedRoles();
     logger.info("Database seeding completed");
   } catch (err) {
     logger.error(`Database seeding failed: ${err.message}`);
