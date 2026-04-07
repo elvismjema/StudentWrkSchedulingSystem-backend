@@ -594,4 +594,25 @@ exports.assignDepartment = async (req, res) => {
   }
 };
 
+// Admin: get roles for a department (excludes admin-level, used for the assign-department dialog)
+exports.getDepartmentRoles = async (req, res) => {
+  const departmentId = Number(req.params.departmentId);
+
+  if (!departmentId) {
+    return res.status(400).json({ success: false, message: "Valid departmentId is required." });
+  }
+
+  try {
+    const roles = await Role.findAll({
+      where: { department_id: departmentId },
+      order: [["permission_level", "ASC"]],
+    });
+
+    return res.status(200).json({ success: true, data: roles });
+  } catch (err) {
+    logger.error(`Admin getDepartmentRoles error: ${err.message}`);
+    return res.status(500).json({ success: false, message: "Failed to retrieve roles.", error: err.message });
+  }
+};
+
 export default exports;
