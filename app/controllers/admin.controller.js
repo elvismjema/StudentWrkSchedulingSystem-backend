@@ -603,12 +603,36 @@ exports.getDepartmentRoles = async (req, res) => {
   }
 
   try {
+    // Ensure the standard Student and Manager roles exist for this department.
+    // Uses findOrCreate so it is safe to call on every request — it only inserts
+    // when a role with that name does not yet exist for the department.
+    const standardRoles = [
+      { role_name: "Student", permission_level: 10, description: "Student worker with basic scheduling access" },
+      { role_name: "Manager", permission_level: 60, description: "Department manager with scheduling and approval permissions" },
+    ];
+
+    for (const template of standardRoles) {
+      await Role.findOrCreate({
+        where: { department_id: departmentId, role_name: template.role_name },
+        defaults: {
+          department_id: departmentId,
+          role_name: template.role_name,
+          permission_level: template.permission_level,
+          description: template.description,
+        },
+      });
+    }
+
+    // Return all non-admin roles for this department
     const roles = await Role.findAll({
       where: { department_id: departmentId },
       order: [["permission_level", "ASC"]],
     });
 
-    return res.status(200).json({ success: true, data: roles });
+    // Filter out admin-level roles (permission_level >= 90) before returning
+    const filtered = roles.filter((r) => Number(r.permission_level) < 90);
+
+    return res.status(200).json({ success: true, data: filtered });
   } catch (err) {
     logger.error(`Admin getDepartmentRoles error: ${err.message}`);
     return res.status(500).json({ success: false, message: "Failed to retrieve roles.", error: err.message });
