@@ -1,5 +1,6 @@
 import db from "../models/index.js";
 
+const User = db.user;
 const UserDepartment = db.userDepartment;
 const Role = db.role;
 
@@ -133,6 +134,12 @@ const canUseOpenManagerBootstrap = async (email) => {
 export const resolveHighestRoleForUser = async (userId, email) => {
   const normalizedEmail = normalize(email);
   if (BOOTSTRAP_ADMIN_EMAILS.has(normalizedEmail)) return "admin";
+
+  // Check the global role flag on the user record first
+  if (userId) {
+    const user = await User.findByPk(userId, { attributes: ["role"] });
+    if (user?.role === "admin") return "admin";
+  }
 
   const memberships = await getUserRoleMemberships(userId);
   const roleTypes = memberships.map((membership) => membership.classification);

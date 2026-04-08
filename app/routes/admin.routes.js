@@ -18,6 +18,9 @@ router.delete("/pending-assignments/:id", AdminController.deletePendingAssignmen
 // Assign a manager or student worker to a single department (enforces one-department rule)
 router.post("/assign-department", AdminController.assignDepartment);
 
+// Promote a user to site-wide admin
+router.post("/users/:userId/promote-to-admin", AdminController.promoteToAdmin);
+
 // Get roles for a specific department (manager + student only, excludes admin-level)
 router.get("/departments/:departmentId/roles", AdminController.getDepartmentRoles);
 
