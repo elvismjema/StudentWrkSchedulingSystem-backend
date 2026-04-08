@@ -173,6 +173,9 @@ const validateAssignmentEligibility = async (
   );
 };
 
+const isAvailabilityConflict = (validationResult) =>
+  !validationResult?.valid && validationResult?.conflictType === "availability_conflict";
+
 /**
  * Thin wrapper that routes through the centralised notification service.
  * Accepts optional `options` (type, link, priority) for richer notifications.
@@ -465,6 +468,7 @@ export const validateBufferTime = async (departmentId, shiftDate, startTime, end
 export const createShift = async (req, res) => {
   try {
     const actorUserId = req.auth?.userId || req.body.created_by;
+    let assignmentWarningMessage = null;
 
     // Validate request
     if (!req.body.department_id || !req.body.position_id || !req.body.start_time || !req.body.end_time || !actorUserId) {
@@ -490,11 +494,15 @@ export const createShift = async (req, res) => {
       );
 
       if (!assignmentValidation.valid) {
+        if (isAvailabilityConflict(assignmentValidation)) {
+          assignmentWarningMessage = assignmentValidation.message;
+        } else {
         return res.status(409).send({
           success: false,
           message: assignmentValidation.message,
           conflictType: assignmentValidation.conflictType,
         });
+        }
       }
     }
 
@@ -561,7 +569,13 @@ export const createShift = async (req, res) => {
       },
     );
 
-    res.status(201).send(withShiftStatus(shiftWithAssociations));
+    const payload = withShiftStatus(shiftWithAssociations);
+    if (assignmentWarningMessage) {
+      payload.warning_message = assignmentWarningMessage;
+      payload.warning_type = "availability_conflict";
+    }
+
+    res.status(201).send(payload);
   } catch (err) {
     res.status(500).send({
       message: err.message || "Some error occurred while creating the Shift.",
@@ -683,6 +697,7 @@ export const updateShift = async (req, res) => {
   const id = req.params.id;
 
   try {
+    let assignmentWarningMessage = null;
     // Get the existing shift first (with associations so we can build change diffs)
     const existingShift = await Shift.findByPk(id, { include: shiftIncludes });
 
@@ -711,11 +726,15 @@ export const updateShift = async (req, res) => {
       );
 
       if (!assignmentValidation.valid) {
+        if (isAvailabilityConflict(assignmentValidation)) {
+          assignmentWarningMessage = assignmentValidation.message;
+        } else {
         return res.status(409).send({
           success: false,
           message: assignmentValidation.message,
           conflictType: assignmentValidation.conflictType,
         });
+        }
       }
     }
 
@@ -786,7 +805,13 @@ export const updateShift = async (req, res) => {
         },
       );
 
-      res.send(withShiftStatus(updatedShift));
+      const payload = withShiftStatus(updatedShift);
+      if (assignmentWarningMessage) {
+        payload.warning_message = assignmentWarningMessage;
+        payload.warning_type = "availability_conflict";
+      }
+
+      res.send(payload);
     } else {
       res.status(404).send({
         message: `Cannot update Shift with id=${id}. Shift was not found or req.body is empty!`,
