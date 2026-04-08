@@ -929,6 +929,61 @@ export const getTimeOffRequests = async (req, res) => {
   }
 };
 
+/**
+ * DELETE /api/student/time-off/:id
+ *
+ * Cancel a student's own pending time-off request.
+ *
+ * Business rules:
+ *   - Only the request owner (user_id match) can cancel it.
+ *   - Only requests with status "pending" can be cancelled. If the request
+ *     has already been approved, rejected, or previously cancelled, the
+ *     student receives a 409 with the current status in the error message.
+ *   - The row is NOT hard-deleted. Instead, status is set to "cancelled" so
+ *     managers retain a full audit trail of all submitted requests.
+ *   - Ownership is enforced via the WHERE clause (user_id + id). A mismatch
+ *     returns 404 rather than 403 to avoid leaking whether the record exists.
+ *
+ * @param {import("express").Request} req
+ * @param {import("express").Response} res
+ */
+export const cancelTimeOff = async (req, res) => {
+  try {
+    const userId = req.auth.userId;
+    const requestId = Number(req.params.id);
+
+    if (!requestId || isNaN(requestId)) {
+      return fail(res, "Invalid request ID.", 400);
+    }
+
+    // Find the request belonging to this student only
+    const request = await TimeOffRequest.findOne({
+      where: { id: requestId, user_id: userId },
+    });
+
+    if (!request) {
+      return fail(res, "Time-off request not found.", 404);
+    }
+
+    if (request.status !== "pending") {
+      return fail(
+        res,
+        `Cannot cancel a request that is already "${request.status}".`,
+        409
+      );
+    }
+
+    request.status = "cancelled";
+    request.updated_at = new Date();
+    await request.save();
+
+    return ok(res, request, "Time-off request cancelled.");
+  } catch (error) {
+    logger.error(`[StudentController] cancelTimeOff error: ${error.message}`);
+    return fail(res, "Error cancelling time-off request.");
+  }
+};
+
 // ═════════════════════════════════════════════════════════════════════════════
 // 6. AVAILABILITY
 // ═════════════════════════════════════════════════════════════════════════════
