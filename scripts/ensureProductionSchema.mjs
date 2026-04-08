@@ -68,6 +68,14 @@ const main = async () => {
     }),
   );
 
+  appliedChanges += Number(
+    await ensureColumn("users", "role", {
+      type: DataTypes.ENUM("student", "manager", "admin"),
+      allowNull: false,
+      defaultValue: "student",
+    }),
+  );
+
   console.log(`schema sync complete: ${appliedChanges} change(s) applied`);
 };
 
