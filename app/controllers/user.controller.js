@@ -1,5 +1,6 @@
 import db  from "../models/index.js";
 import logger from "../config/logger.js";
+import { getManagedDepartmentIds } from "../authorization/roleAccess.js";
 
 const User = db.user;
 const Shift = db.shift;
@@ -179,6 +180,74 @@ exports.delete = (req, res) => {
         message: "Could not delete User with id=" + id,
       });
     });
+};
+
+// Permanently delete a user from manager flow, scoped to manager's departments.
+exports.deleteByManager = async (req, res) => {
+  const targetUserId = Number(req.params.id);
+  const actorUserId = Number(req.auth?.userId);
+  const actorEmail = req.auth?.email;
+
+  if (!targetUserId) {
+    return res.status(400).send({
+      message: "Valid user id is required.",
+    });
+  }
+
+  if (!actorUserId) {
+    return res.status(401).send({
+      message: "Unauthorized! Missing authenticated user context.",
+    });
+  }
+
+  if (targetUserId === actorUserId) {
+    return res.status(400).send({
+      message: "You cannot delete your own account.",
+    });
+  }
+
+  try {
+    const targetUser = await User.findByPk(targetUserId, {
+      include: [
+        {
+          model: db.userDepartment,
+          as: "userDepartments",
+          where: { is_active: true },
+          required: false,
+          attributes: ["department_id"],
+        },
+      ],
+    });
+
+    if (!targetUser) {
+      return res.status(404).send({
+        message: `Cannot find User with id=${targetUserId}.`,
+      });
+    }
+
+    const managedDeptIds = await getManagedDepartmentIds(actorUserId, actorEmail);
+    const targetDeptIds = (targetUser.userDepartments || [])
+      .map((membership) => Number(membership.department_id))
+      .filter(Boolean);
+
+    const canDelete = targetDeptIds.some((departmentId) => managedDeptIds.includes(departmentId));
+    if (!canDelete) {
+      return res.status(403).send({
+        message: "Forbidden! You can only permanently delete users in your departments.",
+      });
+    }
+
+    await targetUser.destroy();
+
+    return res.send({
+      message: "User was permanently deleted successfully!",
+    });
+  } catch (err) {
+    logger.error(`Error deleting user ${targetUserId} from manager flow: ${err.message}`);
+    return res.status(500).send({
+      message: err.message || `Could not delete User with id=${targetUserId}.`,
+    });
+  }
 };
 
 // Deactivate a user account (manager action)
