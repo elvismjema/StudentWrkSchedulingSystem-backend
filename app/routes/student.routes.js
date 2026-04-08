@@ -24,6 +24,7 @@ import {
   // 5. Time Off
   submitTimeOff,
   getTimeOffRequests,
+  cancelTimeOff,
   // 6. Availability
   getMyAvailability,
   updateMyAvailability,
@@ -70,6 +71,8 @@ router.delete("/swap-requests/:id", [authenticate], cancelSwapRequest);
 // ── 5. Time Off ──────────────────────────────────────────────────────────────
 router.post("/time-off", [authenticate], submitTimeOff);
 router.get("/time-off", [authenticate], getTimeOffRequests);
+// NOTE: :id must come after any static sub-paths to avoid route conflicts
+router.delete("/time-off/:id", [authenticate], cancelTimeOff);
 
 // ── 6. Availability ──────────────────────────────────────────────────────────
 router.get("/availability", [authenticate], getMyAvailability);
