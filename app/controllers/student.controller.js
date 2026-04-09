@@ -702,11 +702,69 @@ export const getSwapRequests = async (req, res) => {
     const userId = req.auth.userId;
     const direction = req.query.direction || "all";
 
+    const shiftIncludes = [
+      {
+        model: Shift,
+        as: "requesterShift",
+        include: [
+          { model: Department, as: "department", attributes: ["department_id", "department_name"] },
+          { model: Position, as: "position", attributes: ["position_id", "position_name"] },
+        ],
+      },
+      {
+        model: Shift,
+        as: "respondentShift",
+        required: false,
+        include: [
+          { model: Department, as: "department", attributes: ["department_id", "department_name"] },
+        ],
+      },
+      { model: User, as: "requester", attributes: ["id", "fName", "lName", "email"] },
+      { model: User, as: "respondent", attributes: ["id", "fName", "lName", "email"] },
+    ];
+
     let where;
     if (direction === "incoming") {
       where = { respondent_user_id: userId };
     } else if (direction === "outgoing") {
       where = { requester_user_id: userId };
+    } else if (direction === "pool") {
+      // Show pending find_cover requests from the student's departments
+      // that were posted by OTHER students (not the current user)
+      const userDepts = await UserDepartment.findAll({
+        where: { user_id: userId, is_active: true },
+        attributes: ["department_id"],
+      });
+      const deptIds = userDepts.map((ud) => ud.department_id);
+
+      if (deptIds.length === 0) {
+        return ok(res, []);
+      }
+
+      // Find cover requests still in pool from shifts in the student's departments
+      const requests = await ShiftSwapRequest.findAll({
+        where: {
+          type: "find_cover",
+          status: "pending",
+          requester_user_id: { [Op.ne]: userId },
+        },
+        include: [
+          {
+            model: Shift,
+            as: "requesterShift",
+            required: true,
+            where: { department_id: { [Op.in]: deptIds } },
+            include: [
+              { model: Department, as: "department", attributes: ["department_id", "department_name"] },
+              { model: Position, as: "position", attributes: ["position_id", "position_name"] },
+            ],
+          },
+          { model: User, as: "requester", attributes: ["id", "fName", "lName", "email"] },
+        ],
+        order: [["created_at", "DESC"]],
+      });
+
+      return ok(res, requests);
     } else {
       where = {
         [Op.or]: [{ requester_user_id: userId }, { respondent_user_id: userId }],
@@ -715,25 +773,7 @@ export const getSwapRequests = async (req, res) => {
 
     const requests = await ShiftSwapRequest.findAll({
       where,
-      include: [
-        {
-          model: Shift,
-          as: "requesterShift",
-          include: [
-            { model: Department, as: "department", attributes: ["department_id", "department_name"] },
-          ],
-        },
-        {
-          model: Shift,
-          as: "respondentShift",
-          required: false,
-          include: [
-            { model: Department, as: "department", attributes: ["department_id", "department_name"] },
-          ],
-        },
-        { model: User, as: "requester", attributes: ["id", "fName", "lName", "email"] },
-        { model: User, as: "respondent", attributes: ["id", "fName", "lName", "email"] },
-      ],
+      include: shiftIncludes,
       order: [["created_at", "DESC"]],
     });
 
