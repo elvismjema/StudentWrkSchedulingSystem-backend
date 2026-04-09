@@ -81,6 +81,7 @@ jobs:
             cd /home/ubuntu/nodeapps/sev2026/t2
             npm ci --omit=dev
             npm run schema:sync
+            npx sequelize-cli db:migrate
             sudo cp workerscheduling-t2-backend.service /etc/systemd/system/workerscheduling-t2-backend.service
             sudo systemctl daemon-reload
             sudo systemctl enable workerscheduling-t2-backend

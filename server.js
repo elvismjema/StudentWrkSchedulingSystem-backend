@@ -134,8 +134,17 @@ const startServer = async () => {
     // Add any missing columns before syncing
     await addMissingColumns();
 
-    await db.sequelize.sync();
-    logger.info("Database schema synchronized");
+    // Sync Sequelize models with the database (creates any missing tables).
+    // This is intentionally non-fatal: if the production DB user lacks DDL
+    // privileges or a new table can't be auto-created, the server still starts
+    // and serves all existing features. New tables must be created via:
+    //   npx sequelize-cli db:migrate
+    try {
+      await db.sequelize.sync();
+      logger.info("Database schema synchronized");
+    } catch (syncErr) {
+      logger.warn(`Database schema sync skipped — run migrations manually if new features are missing: ${syncErr.message}`);
+    }
 
     // Seed essential data (uses findOrCreate, safe to run every startup)
     await runSeeds();
