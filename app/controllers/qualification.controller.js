@@ -56,6 +56,58 @@ export { upload };
 
 // Get all students with their qualifications (optional filter by qualificationId)
 export const getStudentsWithQualifications = async (req, res) => {
+  try {
+    const { qualificationId, status } = req.query;
+    const where = {};
+
+    if (qualificationId) {
+      where.qualification_id = Number(qualificationId);
+    }
+
+    if (status) {
+      const normalizedStatus = String(status).toLowerCase();
+      if (!["pending", "approved", "rejected"].includes(normalizedStatus)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid status. Must be 'pending', 'approved', or 'rejected'."
+        });
+      }
+      where.approval_status = normalizedStatus;
+    }
+
+    const userQualifications = await db.user_qualification.findAll({
+      where,
+      include: [
+        {
+          model: db.user,
+          as: "user",
+          attributes: ["id", "fName", "lName", "email"]
+        },
+        {
+          model: db.qualification,
+          as: "qualification",
+          attributes: ["id", "qualification_name", "description", "requires_document"]
+        }
+      ],
+      order: [["created_at", "DESC"]]
+    });
+
+    const formattedQualifications = userQualifications.map(formatUserQualification);
+
+    return res.status(200).json({
+      success: true,
+      data: formattedQualifications,
+      count: formattedQualifications.length
+    });
+  } catch (error) {
+    console.error("Error fetching student qualifications:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch qualifications",
+      error: error.message
+    });
+  }
+};
 
 const UPLOADS_DIR = path.resolve(process.cwd(), "uploads", "qualifications");
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5MB

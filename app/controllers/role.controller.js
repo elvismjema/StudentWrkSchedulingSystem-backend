@@ -1,7 +1,7 @@
 import db from "../models/index.js";
 
-
 const User = db.user;
+const Role = db.role;
 
 // Get all available roles (from the ENUM)
 export const getAllRoles = async (req, res) => {
@@ -18,8 +18,10 @@ export const getAllRoles = async (req, res) => {
     console.error('Error fetching roles:', error);
     res.status(500).json({
       message: "Error retrieving roles",
-
-const Role = db.role;
+      error: error.message
+    });
+  }
+};
 
 // Create a new role
 export const createRole = async (req, res) => {
@@ -48,63 +50,23 @@ export const createRole = async (req, res) => {
       permission_level
     });
 
-    const createdRole = await Role.findByPk(role.role_id, {
-      include: [{ model: db.department, as: "department" }]
-    });
-
     return res.status(201).json({
       success: true,
-      data: createdRole
+      data: role
     });
   } catch (error) {
     return res.status(500).json({
       success: false,
       message: "Failed to create role",
-
       error: error.message
     });
   }
 };
 
-
-// Get single role by ID
-export const getRoleById = async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const allRoles = [
-      { role_id: 'student', role_name: 'Student', permission_level: 10 },
-      { role_id: 'manager', role_name: 'Manager', permission_level: 50 },
-      { role_id: 'admin', role_name: 'Administrator', permission_level: 90 }
-    ];
-    
-    const role = allRoles.find(r => r.role_id === id);
-    
-    if (!role) {
-      return res.status(404).json({
-        message: "Role not found"
-      });
-    }
-    
-    res.status(200).json(role);
-  } catch (error) {
-    console.error('Error fetching role:', error);
-    res.status(500).json({
-      message: "Error retrieving role",
-
-// Retrieve all roles with optional department filter
+// Retrieve all roles
 export const listRoles = async (req, res) => {
   try {
-    const { department_id } = req.query;
-    const where = {};
-
-    if (department_id) {
-      where.department_id = department_id;
-    }
-
     const roles = await Role.findAll({
-      where,
-      include: [{ model: db.department, as: "department" }],
       order: [["role_name", "ASC"]]
     });
 
@@ -121,7 +83,7 @@ export const listRoles = async (req, res) => {
   }
 };
 
-// Retrieve one role by id
+// Get single role by ID
 export const getRoleById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -145,62 +107,15 @@ export const getRoleById = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch role",
-
       error: error.message
     });
   }
 };
 
-
-// Update user role
-export const updateUserRole = async (req, res) => {
-  try {
-    const { userId, role } = req.body;
-    
-    if (!userId || !role) {
-      return res.status(400).json({
-        message: "User ID and role are required"
-      });
-    }
-    
-    // Validate role
-    const validRoles = ['student', 'manager', 'admin'];
-    if (!validRoles.includes(role)) {
-      return res.status(400).json({
-        message: "Invalid role. Must be one of: student, manager, admin"
-      });
-    }
-    
-    const user = await User.findByPk(userId);
-    
-    if (!user) {
-      return res.status(404).json({
-        message: "User not found"
-      });
-    }
-    
-    await user.update({ role });
-    
-    res.status(200).json({
-      message: "User role updated successfully",
-      user: {
-        id: user.id,
-        fName: user.fName,
-        lName: user.lName,
-        email: user.email,
-        role: user.role
-      }
-    });
-  } catch (error) {
-    console.error('Error updating user role:', error);
-    res.status(500).json({
-      message: "Error updating user role",
-
-// Update role by id
+// Update a role
 export const updateRole = async (req, res) => {
   try {
     const { id } = req.params;
-    const { department_id, role_name, description, permission_level } = req.body;
 
     const role = await Role.findByPk(id);
     if (!role) {
@@ -210,30 +125,24 @@ export const updateRole = async (req, res) => {
       });
     }
 
-    if (department_id !== undefined) {
-      const department = await db.department.findByPk(department_id);
-      if (!department) {
-        return res.status(404).json({
-          success: false,
-          message: "Department not found"
-        });
+    const updatableFields = [
+      "role_name",
+      "description",
+      "permission_level"
+    ];
+
+    updatableFields.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        role[field] = req.body[field];
       }
-      role.department_id = department_id;
-    }
-
-    if (role_name !== undefined) role.role_name = role_name;
-    if (description !== undefined) role.description = description;
-    if (permission_level !== undefined) role.permission_level = permission_level;
-
-    await role.save();
-
-    const updatedRole = await Role.findByPk(id, {
-      include: [{ model: db.department, as: "department" }]
     });
+
+    role.updated_at = new Date();
+    await role.save();
 
     return res.status(200).json({
       success: true,
-      data: updatedRole
+      data: role
     });
   } catch (error) {
     return res.status(500).json({
@@ -244,7 +153,7 @@ export const updateRole = async (req, res) => {
   }
 };
 
-// Delete role by id
+// Delete a role
 export const deleteRole = async (req, res) => {
   try {
     const { id } = req.params;
@@ -267,7 +176,61 @@ export const deleteRole = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to delete role",
+      error: error.message
+    });
+  }
+};
 
+// Update user role
+export const updateUserRole = async (req, res) => {
+  try {
+    const { user_id, role_id, department_id } = req.body;
+
+    if (!user_id || !role_id || !department_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields: user_id, role_id, department_id"
+      });
+    }
+
+    const user = await User.findByPk(user_id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    const role = await Role.findByPk(role_id);
+    if (!role) {
+      return res.status(404).json({
+        success: false,
+        message: "Role not found"
+      });
+    }
+
+    const department = await db.department.findByPk(department_id);
+    if (!department) {
+      return res.status(404).json({
+        success: false,
+        message: "Department not found"
+      });
+    }
+
+    // Update user role
+    await user.update({
+      role: role_id,
+      department_id: department_id
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "User role updated successfully"
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update user role",
       error: error.message
     });
   }
