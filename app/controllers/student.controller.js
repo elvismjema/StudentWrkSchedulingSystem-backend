@@ -231,7 +231,9 @@ export const getDashboard = async (req, res) => {
     ]);
 
     // Derive next shift (first today shift with end_time > now, or first future shift this week)
-    const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
+    // Use UTC consistently — today is already UTC, so nowMinutes must also be UTC
+    const nowUTC = new Date();
+    const nowMinutes = nowUTC.getUTCHours() * 60 + nowUTC.getUTCMinutes();
     let nextShift = todayShifts.find((s) => toMinutes(s.end_time) > nowMinutes) || null;
     if (!nextShift && weekShifts.length > 0) {
       nextShift = weekShifts.find(
@@ -245,7 +247,11 @@ export const getDashboard = async (req, res) => {
     }, 0);
 
     // Build day-of-week indicators (Mon=1 ... Sun=7)
-    const scheduledDays = [...new Set(weekShifts.map((s) => new Date(s.shift_date).getDay()))];
+    // Parse DATEONLY strings without timezone ambiguity
+    const scheduledDays = [...new Set(weekShifts.map((s) => {
+      const [y, m, d] = s.shift_date.split('-').map(Number);
+      return new Date(y, m - 1, d).getDay();
+    }))];
 
     return ok(res, {
       nextShift,
