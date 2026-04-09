@@ -36,6 +36,14 @@ const main = async () => {
   );
 
   appliedChanges += Number(
+    await ensureColumn("positions", "color", {
+      type: DataTypes.STRING(7),
+      allowNull: true,
+      defaultValue: null,
+    }),
+  );
+
+  appliedChanges += Number(
     await ensureColumn("notifications", "type", {
       type: DataTypes.ENUM(
         "shift_assignment",
