@@ -137,6 +137,24 @@ const syncWeeklyRecurringSeries = async (baseShift, actorUserId) => {
   }
 };
 
+const deleteFutureRecurringSeriesShifts = async (seriesSeedShift, cutoffShiftDate) => {
+  const seriesAnchorDate = seriesSeedShift?.recurrence_start_date || seriesSeedShift?.shift_date;
+  const effectiveCutoffDate = cutoffShiftDate || seriesSeedShift?.shift_date;
+  if (!seriesAnchorDate || !effectiveCutoffDate) return 0;
+
+  const where = {
+    shift_id: { [Op.ne]: seriesSeedShift.shift_id },
+    department_id: seriesSeedShift.department_id,
+    created_by: seriesSeedShift.created_by,
+    is_recurring: true,
+    recurrence_pattern: "weekly",
+    recurrence_start_date: seriesAnchorDate,
+    shift_date: { [Op.gt]: effectiveCutoffDate },
+  };
+
+  return Shift.destroy({ where });
+};
+
 const validateDepartmentMembership = async (departmentId, userId, positionId) => {
   if (!departmentId || !userId) {
     return {
@@ -839,6 +857,7 @@ export const updateShift = async (req, res) => {
     }
 
     const isRecurring = req.body.is_recurring !== undefined ? !!req.body.is_recurring : !!existingShift.is_recurring;
+    const turningRecurringOff = !!existingShift.is_recurring && req.body.is_recurring === false;
     const recurrenceEndDate = req.body.recurrence_end_date !== undefined
       ? req.body.recurrence_end_date
       : existingShift.recurrence_end_date;
@@ -873,6 +892,15 @@ export const updateShift = async (req, res) => {
     );
 
     const updatePayload = { ...req.body };
+    if (updatePayload.is_recurring === false) {
+      updatePayload.recurrence_pattern = null;
+      updatePayload.recurrence_end_date = null;
+      updatePayload.recurrence_start_date = null;
+    } else if (updatePayload.is_recurring === true && !updatePayload.recurrence_start_date) {
+      // Preserve a stable series identifier across edits.
+      updatePayload.recurrence_start_date = existingShift.recurrence_start_date || existingShift.shift_date;
+    }
+
     if (updatePayload.trade_status === "open" && updatePayload.assigned_user_id === undefined) {
       updatePayload.assigned_user_id = null;
     }
@@ -887,7 +915,9 @@ export const updateShift = async (req, res) => {
 
     if (num === 1) {
       let baseShift = await Shift.findByPk(id);
-      if (baseShift?.is_recurring) {
+      if (turningRecurringOff) {
+        await deleteFutureRecurringSeriesShifts(existingShift, baseShift?.shift_date || existingShift.shift_date);
+      } else if (baseShift?.is_recurring) {
         await syncWeeklyRecurringSeries(baseShift, actorUserId || baseShift.created_by);
       }
 
