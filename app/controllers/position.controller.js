@@ -22,8 +22,6 @@ export const createPosition = async (req, res) => {
       });
     }
 
-    const { color } = req.body;
-
     const position = await Position.create({
       department_id,
       position_name,
