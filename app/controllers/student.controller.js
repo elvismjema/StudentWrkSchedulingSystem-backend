@@ -176,10 +176,13 @@ export const getDashboard = async (req, res) => {
         order: [["shift_date", "ASC"], ["start_time", "ASC"]],
       }),
 
-      // Current clock-in status
+      // Current clock-in status (includes open break record to derive onBreak)
       ClockRecord.findOne({
         where: { user_id: userId, clock_out: null },
-        include: [{ model: Shift, as: "shift", include: [{ model: Department, as: "department" }] }],
+        include: [
+          { model: Shift, as: "shift", include: [{ model: Department, as: "department" }] },
+          { model: BreakRecord, as: "breaks", where: { break_end: null }, required: false },
+        ],
         order: [["clock_in", "DESC"]],
       }),
 
@@ -248,9 +251,10 @@ export const getDashboard = async (req, res) => {
               (Date.now() - new Date(openClockRecord.clock_in).getTime()) / 60000
             ),
             clockRecordId: openClockRecord.clock_id,
+            onBreak: Array.isArray(openClockRecord.breaks) && openClockRecord.breaks.length > 0,
             shift: openClockRecord.shift,
           }
-        : { isClockedIn: false },
+        : { isClockedIn: false, onBreak: false },
       pendingCounts: {
         acknowledgements: pendingAcknowledgements,
         timeOff: pendingTimeOff,
