@@ -427,7 +427,8 @@ export const getOpenShifts = async (req, res) => {
 
     // Two types of open shifts:
     // 1. Truly unassigned shifts (assigned_user_id is null)
-    // 2. Shifts needing cover (trade_status = 'pending_cover', assigned to someone else)
+    // 2. Shifts where cover was approved by manager (trade_status = 'approved_cover')
+    //    NOTE: 'pending_cover' shifts are NOT shown — manager must approve first.
     const dateFilter = { [Op.gte]: startDate || today };
     if (endDate) dateFilter[Op.lte] = endDate;
 
@@ -441,9 +442,9 @@ export const getOpenShifts = async (req, res) => {
           assigned_user_id: null,
           [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
         },
-        // Shifts needing cover (not the student's own shift)
+        // Cover-approved shifts (manager has greenlit the search; not the student's own shift)
         {
-          trade_status: "pending_cover",
+          trade_status: "approved_cover",
           assigned_user_id: { [Op.ne]: userId },
         },
       ],
@@ -494,7 +495,12 @@ export const claimOpenShift = async (req, res) => {
       return fail(res, "Shift not found.", 404);
     }
 
-    if (shift.assigned_user_id) {
+    // For truly unassigned shifts: assigned_user_id must be null.
+    // For cover-approved shifts (trade_status = 'approved_cover'): assigned_user_id is the
+    // original student — this is allowed; the volunteer is requesting to pick it up.
+    const isCoverApproved = shift.trade_status === "approved_cover";
+
+    if (shift.assigned_user_id && !isCoverApproved) {
       await transaction.rollback();
       return fail(res, "This shift has already been claimed.", 409);
     }
@@ -512,6 +518,12 @@ export const claimOpenShift = async (req, res) => {
     if (!membership) {
       await transaction.rollback();
       return fail(res, "You are not a member of this department.", 403);
+    }
+
+    // Cannot claim your own shift
+    if (shift.assigned_user_id === userId) {
+      await transaction.rollback();
+      return fail(res, "You cannot claim your own shift.", 400);
     }
 
     // Conflict check: overlapping shifts on same date
@@ -536,43 +548,95 @@ export const claimOpenShift = async (req, res) => {
       );
     }
 
-    // Prevent duplicate pending claims from the same user for the same shift.
-    const existingClaim = await ShiftSwapRequest.findOne({
-      where: {
-        requester_shift_id: shiftId,
-        requester_user_id: userId,
-        type: "find_cover",
-        status: { [Op.in]: ["pending", "manager_pending"] },
-      },
-      transaction,
-    });
-    if (existingClaim) {
-      await transaction.rollback();
-      return fail(res, "You already have a pending claim for this shift.", 409);
+    let claimRequest;
+
+    if (isCoverApproved) {
+      // ── COVER-APPROVED flow (Stage 2) ────────────────────────────────────
+      // The shift was posted via find-cover and manager approved it as open.
+      // Volunteer (userId) is now requesting to pick it up.
+      // Reuse the existing SwapRequest record (created in Stage 1).
+
+      const coverSwapReq = await ShiftSwapRequest.findOne({
+        where: {
+          requester_shift_id: shiftId,
+          type: "find_cover",
+          status: "cover_approved",
+        },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+
+      if (!coverSwapReq) {
+        await transaction.rollback();
+        return fail(res, "Cover request record not found. Please try again.", 500);
+      }
+
+      // Prevent duplicate: same volunteer already has a pending pickup for this shift
+      if (coverSwapReq.respondent_user_id === userId) {
+        await transaction.rollback();
+        return fail(res, "You already have a pending pickup request for this shift.", 409);
+      }
+
+      coverSwapReq.respondent_user_id = userId;
+      coverSwapReq.respondent_notes = req.body?.notes || null;
+      coverSwapReq.status = "manager_pending";
+      coverSwapReq.updated_at = new Date();
+      await coverSwapReq.save({ transaction });
+
+      claimRequest = coverSwapReq;
+
+      await transaction.commit();
+
+      // Notify the original student that someone wants to take their shift
+      sendNotification(
+        coverSwapReq.requester_user_id,
+        "Someone Wants to Cover Your Shift",
+        `A student has requested to pick up your shift on ${shift.shift_date}. Waiting for manager approval.`,
+        { type: "shift_change", link: "/student/schedule" }
+      ).catch((err) => logger.error(`Notification error: ${err.message}`));
+
+    } else {
+      // ── TRULY UNASSIGNED flow ────────────────────────────────────────────
+      // Original open shift (no assigned_user_id). Student claims it directly.
+
+      // Prevent duplicate pending claims from the same user for the same shift.
+      const existingClaim = await ShiftSwapRequest.findOne({
+        where: {
+          requester_shift_id: shiftId,
+          requester_user_id: userId,
+          type: "find_cover",
+          status: { [Op.in]: ["pending", "manager_pending"] },
+        },
+        transaction,
+      });
+      if (existingClaim) {
+        await transaction.rollback();
+        return fail(res, "You already have a pending claim for this shift.", 409);
+      }
+
+      claimRequest = await ShiftSwapRequest.create(
+        {
+          requester_shift_id: shiftId,
+          requester_user_id: userId,
+          respondent_user_id: userId,
+          type: "find_cover",
+          status: "manager_pending",
+          requester_notes: req.body?.notes || "Open shift claim request",
+          created_at: new Date(),
+          updated_at: new Date(),
+        },
+        { transaction }
+      );
+
+      await transaction.commit();
+
+      sendNotification(userId, "Shift Claim Submitted", `Your claim for the shift on ${shift.shift_date} is pending manager approval.`, {
+        type: "shift_assignment",
+        link: `/manager/approvals`,
+      }).catch((err) => logger.error(`Notification error: ${err.message}`));
     }
 
-    // Reuse pending-approval workflow via ShiftSwapRequest.
-    const claimRequest = await ShiftSwapRequest.create(
-      {
-        requester_shift_id: shiftId,
-        requester_user_id: userId,
-        respondent_user_id: userId,
-        type: "find_cover",
-        status: "manager_pending",
-        requester_notes: req.body?.notes || "Open shift claim request",
-        created_at: new Date(),
-        updated_at: new Date(),
-      },
-      { transaction }
-    );
-
-    await transaction.commit();
-
-    // Notify (non-blocking)
-    sendNotification(userId, "Shift Claim Submitted", `Your claim for the shift on ${shift.shift_date} is pending manager approval.`, {
-      type: "shift_assignment",
-      link: `/manager/approvals`,
-    }).catch((err) => logger.error(`Notification error: ${err.message}`));
+    // Notify managers in either flow
     notifyManagersOfSwapRequest(claimRequest, shift, "find_cover").catch((err) =>
       logger.error(`Manager notification error: ${err.message}`)
     );
@@ -612,12 +676,12 @@ export const findCover = async (req, res) => {
       return fail(res, "Cannot find cover for past shifts.", 400);
     }
 
-    // Check for existing pending request
+    // Check for existing active request
     const existing = await ShiftSwapRequest.findOne({
       where: {
         requester_shift_id: shiftId,
         requester_user_id: userId,
-        status: { [Op.in]: ["pending", "manager_pending"] },
+        status: { [Op.in]: ["pending", "cover_approved", "manager_pending"] },
       },
     });
     if (existing) {
@@ -634,12 +698,17 @@ export const findCover = async (req, res) => {
       updated_at: new Date(),
     });
 
-    // Mark the shift as needing cover so it shows up in open-shifts feeds
+    // Mark the shift as pending cover (manager must approve before it becomes open)
     shift.trade_status = "pending_cover";
     shift.updated_at = new Date();
     await shift.save();
 
-    return ok(res, request, "Cover request posted.", 201);
+    // Notify managers immediately — they must approve before the shift is visible as open
+    notifyManagersOfSwapRequest(request, shift, "find_cover").catch((err) =>
+      logger.error(`Manager notification error: ${err.message}`)
+    );
+
+    return ok(res, request, "Cover request submitted for manager approval.", 201);
   } catch (error) {
     logger.error(`[StudentController] findCover error: ${error.message}`);
     return fail(res, "Error creating cover request.");
@@ -970,30 +1039,44 @@ export const respondToSwapRequest = async (req, res) => {
  * @param {string} type    - "find_cover" | "swap"
  */
 async function notifyManagersOfSwapRequest(swapReq, shift, type) {
-  const managers = await User.findAll({
+  // Find all active members of the department whose role name indicates manager/admin
+  const memberships = await db.userDepartment.findAll({
+    where: {
+      department_id: shift.department_id,
+      is_active: true,
+    },
     include: [
       {
-        model: db.userDepartment,
-        as: "userDepartments",
-        where: {
-          departmentId: shift.department_id,
-          classification: { [Op.in]: ["manager", "admin"] },
-        },
-        required: true,
-        attributes: [],
+        model: db.role,
+        as: "role",
+        attributes: ["role_name"],
+        required: false,
       },
     ],
-    attributes: ["id"],
+    attributes: ["user_id"],
   });
 
+  // Filter to managers/admins by role name
+  const managerUserIds = memberships
+    .filter((m) => {
+      const rn = String(m.role?.role_name || "").toLowerCase();
+      return rn.includes("manager") || rn.includes("admin") || rn.includes("supervisor");
+    })
+    .map((m) => m.user_id);
+
+  if (managerUserIds.length === 0) return;
+
   const label = type === "find_cover" ? "cover" : "swap";
-  const notifications = managers.map((mgr) =>
+  const title = type === "find_cover" ? "Cover Request Needs Approval" : "Swap Request Needs Approval";
+  const body = `A shift ${label} request for ${shift.shift_date} is awaiting your approval.`;
+
+  const notifications = managerUserIds.map((userId) =>
     sendNotification(
-      mgr.id,
-      `Shift ${label === "cover" ? "Cover" : "Swap"} Request Needs Approval`,
-      `A shift ${label} request for ${shift.shift_date} is awaiting your approval.`,
-      { type: "shift_change", link: `/manager/swap-requests/${swapReq.id}`, priority: "high" }
-    ).catch((err) => logger.error(`Manager notification error (userId ${mgr.id}): ${err.message}`))
+      userId,
+      title,
+      body,
+      { type: "shift_change", link: `/manager/approvals`, priority: "high" }
+    ).catch((err) => logger.error(`Manager notification error (userId ${userId}): ${err.message}`))
   );
 
   await Promise.allSettled(notifications);

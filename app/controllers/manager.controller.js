@@ -209,16 +209,15 @@ export const getManagerSwapRequests = async (req, res) => {
     const departmentIds = await getDepartmentScope(req);
     if (!departmentIds.length) return ok(res, []);
 
-    // Default: show all requests that need attention (pending pool + awaiting manager review)
-    // ?status=all shows everything including approved/declined history
-    // ?status=manager_pending shows only requests awaiting manager action
+    // Default: pending (Stage 1 cover requests needing approval) +
+    //          manager_pending (Stage 2 pickup requests + swap approvals)
+    // ?status=all   → full history
     let statusFilter;
     if (req.query.status === "all") {
       statusFilter = {};
     } else if (req.query.status) {
       statusFilter = { status: req.query.status };
     } else {
-      // Default: show pending (waiting for volunteer) + manager_pending (awaiting approval)
       statusFilter = { status: { [Op.in]: ["pending", "manager_pending"] } };
     }
 
@@ -297,17 +296,17 @@ export const reviewSwapRequest = async (req, res) => {
       return fail(res, "Swap request not found.", 404);
     }
 
-    // Manager can decline requests in "pending" (still in pool) or "manager_pending" (volunteer found)
-    // Manager can only approve "manager_pending" requests (a volunteer must exist to assign the shift)
+    // Reviewable states
     const reviewableStatuses = ["pending", "manager_pending"];
     if (!reviewableStatuses.includes(swapReq.status)) {
       await transaction.rollback();
       return fail(res, `Request is already "${swapReq.status}" and cannot be reviewed again.`, 409);
     }
 
-    if (action === "approve" && swapReq.status === "pending") {
+    // Prevent approving a pending swap before the other student has responded
+    if (action === "approve" && swapReq.status === "pending" && swapReq.type === "swap") {
       await transaction.rollback();
-      return fail(res, "Cannot approve yet — no student has volunteered to cover this shift.", 400);
+      return fail(res, "Cannot approve a shift swap until the other student has responded.", 400);
     }
 
     // Ensure the shift belongs to one of this manager's departments
@@ -320,79 +319,121 @@ export const reviewSwapRequest = async (req, res) => {
     // Fetch manager's name for notification messages
     const manager = await db.user.findByPk(managerId, { attributes: ["id", "fName", "lName"], transaction });
     const managerName = manager ? `${manager.fName} ${manager.lName}` : "Manager";
+    const declineMsg = notes ? `Reason: ${notes}` : "";
 
-    // ── DECLINE ──────────────────────────────────────────────────────────────
-    if (action === "decline") {
-      swapReq.status = "declined";
+    // ════════════════════════════════════════════════════════════════════════
+    // FIND COVER — Stage 1: manager approves/denies the cover request itself
+    // (status = "pending", type = "find_cover")
+    // ════════════════════════════════════════════════════════════════════════
+    if (swapReq.type === "find_cover" && swapReq.status === "pending") {
+      const shift = await db.shift.findByPk(swapReq.requester_shift_id, { transaction, lock: transaction.LOCK.UPDATE });
+      if (!shift) {
+        await transaction.rollback();
+        return fail(res, "Shift no longer exists.", 404);
+      }
+
+      if (action === "decline") {
+        // Deny the cover request — shift stays assigned to original student as-is
+        swapReq.status = "declined";
+        swapReq.manager_notes = notes || null;
+        swapReq.reviewed_by = managerId;
+        swapReq.reviewed_at = new Date();
+        swapReq.updated_at = new Date();
+        await swapReq.save({ transaction });
+
+        shift.trade_status = null;
+        shift.updated_at = new Date();
+        await shift.save({ transaction });
+
+        await transaction.commit();
+
+        sendNotification(
+          swapReq.requester_user_id,
+          "Cover Request Denied",
+          `Your cover request for the shift on ${shift.shift_date} was denied by ${managerName}.${declineMsg ? " " + declineMsg : ""}`,
+          { type: "shift_change" }
+        ).catch((err) => logger.error(`Notification error: ${err.message}`));
+
+        return ok(res, swapReq, "Cover request denied.");
+      }
+
+      // Approve Stage 1 — make the shift visible as an open shift
+      swapReq.status = "cover_approved";
       swapReq.manager_notes = notes || null;
       swapReq.reviewed_by = managerId;
       swapReq.reviewed_at = new Date();
       swapReq.updated_at = new Date();
       await swapReq.save({ transaction });
 
-      // Clear the pending_cover flag on the shift (stays assigned to original student)
-      const declinedShift = await db.shift.findByPk(swapReq.requester_shift_id, { transaction });
-      if (declinedShift && declinedShift.trade_status === "pending_cover") {
-        declinedShift.trade_status = null;
-        declinedShift.updated_at = new Date();
-        await declinedShift.save({ transaction });
-      }
+      shift.trade_status = "approved_cover";
+      shift.updated_at = new Date();
+      await shift.save({ transaction });
 
       await transaction.commit();
 
-      const declineMsg = notes
-        ? `Reason: ${notes}`
-        : "No reason provided.";
-
-      // Notify requester
       sendNotification(
         swapReq.requester_user_id,
-        "Shift Request Declined by Manager",
-        `Your shift ${swapReq.type === "find_cover" ? "cover" : "swap"} request was declined by ${managerName}. ${declineMsg}`,
+        "Cover Request Approved",
+        `${managerName} approved your cover request for the shift on ${shift.shift_date}. The shift is now posted as open — you will be notified when someone picks it up.`,
         { type: "shift_change" }
       ).catch((err) => logger.error(`Notification error: ${err.message}`));
 
-      // Notify respondent (if one was assigned)
-      if (swapReq.respondent_user_id) {
-        sendNotification(
-          swapReq.respondent_user_id,
-          "Shift Request Declined by Manager",
-          `The shift ${swapReq.type === "find_cover" ? "cover" : "swap"} request you accepted was declined by ${managerName}. ${declineMsg}`,
-          { type: "shift_change" }
-        ).catch((err) => logger.error(`Notification error: ${err.message}`));
-      }
-
-      return ok(res, swapReq, "Swap request declined.");
+      return ok(res, swapReq, "Cover request approved. Shift is now open for pickup.");
     }
 
-    // ── APPROVE ──────────────────────────────────────────────────────────────
-    if (swapReq.type === "find_cover") {
-      const shift = await db.shift.findByPk(
-        swapReq.requester_shift_id,
-        { transaction, lock: transaction.LOCK.UPDATE }
-      );
+    // ════════════════════════════════════════════════════════════════════════
+    // FIND COVER — Stage 2: manager approves/denies the pickup request
+    // (status = "manager_pending", type = "find_cover")
+    // ════════════════════════════════════════════════════════════════════════
+    if (swapReq.type === "find_cover" && swapReq.status === "manager_pending") {
+      if (!swapReq.respondent_user_id) {
+        await transaction.rollback();
+        return fail(res, "No volunteer found for this shift yet.", 400);
+      }
+
+      const shift = await db.shift.findByPk(swapReq.requester_shift_id, { transaction, lock: transaction.LOCK.UPDATE });
       if (!shift) {
         await transaction.rollback();
         return fail(res, "Shift no longer exists.", 404);
       }
 
-      const responderHasTimeOff = await hasApprovedTimeOffForDate(
-        swapReq.respondent_user_id,
-        shift.shift_date,
-        transaction,
-      );
-      if (responderHasTimeOff) {
-        await transaction.rollback();
-        return fail(res, "Cannot approve: replacement worker has approved time-off on this date.", 409);
+      if (action === "decline") {
+        // Deny the pickup — shift goes back to being open for other volunteers
+        swapReq.status = "cover_approved";
+        swapReq.respondent_user_id = null;
+        swapReq.respondent_notes = null;
+        swapReq.manager_notes = notes || null;
+        swapReq.updated_at = new Date();
+        await swapReq.save({ transaction });
+
+        // Shift stays as approved_cover (still open for others)
+        await transaction.commit();
+
+        // Notify the rejected volunteer
+        sendNotification(
+          swapReq.respondent_user_id,
+          "Shift Pickup Request Denied",
+          `${managerName} denied your request to pick up the shift on ${shift.shift_date}.${declineMsg ? " " + declineMsg : ""} The shift remains open for other workers.`,
+          { type: "shift_change" }
+        ).catch((err) => logger.error(`Notification error: ${err.message}`));
+
+        return ok(res, swapReq, "Pickup request denied. Shift remains open.");
       }
 
-      // Reassign shift to the respondent and clear the cover flag
+      // Approve Stage 2 — reassign shift to volunteer
+      const responderHasTimeOff = await hasApprovedTimeOffForDate(swapReq.respondent_user_id, shift.shift_date, transaction);
+      if (responderHasTimeOff) {
+        await transaction.rollback();
+        return fail(res, "Cannot approve: volunteer has approved time-off on this date.", 409);
+      }
+
+      const originalAssignedUserId = shift.assigned_user_id;
+
       shift.assigned_user_id = swapReq.respondent_user_id;
       shift.trade_status = null;
       shift.updated_at = new Date();
       await shift.save({ transaction });
 
-      // Create acknowledgement for the new assignee
       await db.shiftAcknowledgement.create(
         { shiftId: shift.shift_id, userId: swapReq.respondent_user_id, acknowledged: false },
         { transaction }
@@ -404,52 +445,73 @@ export const reviewSwapRequest = async (req, res) => {
       swapReq.reviewed_at = new Date();
       swapReq.updated_at = new Date();
       await swapReq.save({ transaction });
+
       await transaction.commit();
 
-      // Notify requester — shift is now covered
-      sendNotification(
-        swapReq.requester_user_id,
-        "Shift Cover Approved",
-        `Your cover request for the shift on ${shift.shift_date} was approved by ${managerName}. Your shift has been reassigned.`,
-        { type: "shift_change", link: `/shifts/${shift.shift_id}` }
-      ).catch((err) => logger.error(`Notification error: ${err.message}`));
+      // Notify original student — shift is now covered
+      if (originalAssignedUserId) {
+        sendNotification(
+          originalAssignedUserId,
+          "Your Shift is Covered",
+          `${managerName} approved a pickup request for your shift on ${shift.shift_date}. You no longer need to work that shift.`,
+          { type: "shift_change" }
+        ).catch((err) => logger.error(`Notification error: ${err.message}`));
+      }
 
-      // Notify respondent — they now own the shift
+      // Notify volunteer — they now own the shift
       sendNotification(
         swapReq.respondent_user_id,
-        "Shift Cover Approved — You're On",
-        `${managerName} approved the cover request. You are now assigned to the shift on ${shift.shift_date}.`,
-        { type: "shift_change", link: `/shifts/${shift.shift_id}` }
+        "Shift Pickup Approved — You're On",
+        `${managerName} approved your request to pick up the shift on ${shift.shift_date}. It is now on your schedule.`,
+        { type: "shift_change", link: "/student/schedule" }
       ).catch((err) => logger.error(`Notification error: ${err.message}`));
 
-      return ok(res, swapReq, "Cover request approved. Shift reassigned.");
+      return ok(res, swapReq, "Pickup approved. Shift reassigned.");
     }
 
-    // swap type — exchange both shift assignments
-    const reqShift = await db.shift.findByPk(
-      swapReq.requester_shift_id,
-      { transaction, lock: transaction.LOCK.UPDATE }
-    );
-    const resShift = await db.shift.findByPk(
-      swapReq.respondent_shift_id,
-      { transaction, lock: transaction.LOCK.UPDATE }
-    );
+    // ════════════════════════════════════════════════════════════════════════
+    // SWAP — manager approves/denies a shift trade
+    // (status = "manager_pending", type = "swap")
+    // ════════════════════════════════════════════════════════════════════════
+    if (action === "decline") {
+      swapReq.status = "declined";
+      swapReq.manager_notes = notes || null;
+      swapReq.reviewed_by = managerId;
+      swapReq.reviewed_at = new Date();
+      swapReq.updated_at = new Date();
+      await swapReq.save({ transaction });
+      await transaction.commit();
+
+      sendNotification(
+        swapReq.requester_user_id,
+        "Shift Swap Declined",
+        `Your shift swap request was declined by ${managerName}.${declineMsg ? " " + declineMsg : ""}`,
+        { type: "shift_change" }
+      ).catch((err) => logger.error(`Notification error: ${err.message}`));
+
+      if (swapReq.respondent_user_id) {
+        sendNotification(
+          swapReq.respondent_user_id,
+          "Shift Swap Declined",
+          `The shift swap request you accepted was declined by ${managerName}.${declineMsg ? " " + declineMsg : ""}`,
+          { type: "shift_change" }
+        ).catch((err) => logger.error(`Notification error: ${err.message}`));
+      }
+
+      return ok(res, swapReq, "Swap declined.");
+    }
+
+    // Approve swap — exchange both shift assignments
+    const reqShift = await db.shift.findByPk(swapReq.requester_shift_id, { transaction, lock: transaction.LOCK.UPDATE });
+    const resShift = await db.shift.findByPk(swapReq.respondent_shift_id, { transaction, lock: transaction.LOCK.UPDATE });
 
     if (!reqShift || !resShift) {
       await transaction.rollback();
       return fail(res, "One or both shifts no longer exist.", 404);
     }
 
-    const requesterTargetHasTimeOff = await hasApprovedTimeOffForDate(
-      resShift.assigned_user_id,
-      reqShift.shift_date,
-      transaction,
-    );
-    const respondentTargetHasTimeOff = await hasApprovedTimeOffForDate(
-      reqShift.assigned_user_id,
-      resShift.shift_date,
-      transaction,
-    );
+    const requesterTargetHasTimeOff = await hasApprovedTimeOffForDate(resShift.assigned_user_id, reqShift.shift_date, transaction);
+    const respondentTargetHasTimeOff = await hasApprovedTimeOffForDate(reqShift.assigned_user_id, resShift.shift_date, transaction);
     if (requesterTargetHasTimeOff || respondentTargetHasTimeOff) {
       await transaction.rollback();
       return fail(res, "Cannot approve swap due to approved time-off conflict.", 409);
@@ -471,7 +533,6 @@ export const reviewSwapRequest = async (req, res) => {
     await swapReq.save({ transaction });
     await transaction.commit();
 
-    // Notify requester
     sendNotification(
       swapReq.requester_user_id,
       "Shift Swap Approved",
@@ -479,7 +540,6 @@ export const reviewSwapRequest = async (req, res) => {
       { type: "shift_change" }
     ).catch((err) => logger.error(`Notification error: ${err.message}`));
 
-    // Notify respondent
     sendNotification(
       swapReq.respondent_user_id,
       "Shift Swap Approved",
@@ -615,6 +675,8 @@ export const getManagerOpenShiftClaims = async (req, res) => {
     const departmentIds = await getDepartmentScope(req);
     if (!departmentIds.length) return ok(res, []);
 
+    // Only show claims for truly unassigned open shifts (the direct-claim flow).
+    // Cover-approved pickup requests (approved_cover shift) are handled via swap-requests.
     const where = {
       type: "find_cover",
       status: "manager_pending",
@@ -628,7 +690,7 @@ export const getManagerOpenShiftClaims = async (req, res) => {
           as: "requesterShift",
           where: {
             department_id: { [Op.in]: departmentIds },
-            assigned_user_id: null,
+            assigned_user_id: null,          // Truly unassigned open shifts only
           },
           required: true,
           include: [
