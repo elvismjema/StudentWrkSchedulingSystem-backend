@@ -87,3 +87,8 @@ jobs:
             sudo systemctl enable workerscheduling-t2-backend
             sudo systemctl reset-failed workerscheduling-t2-backend || true
             sudo systemctl restart workerscheduling-t2-backend
+            sleep 5
+            echo "=== SERVICE STATUS ==="
+            sudo systemctl status workerscheduling-t2-backend --no-pager || true
+            echo "=== LAST 40 LOG LINES ==="
+            sudo journalctl -u workerscheduling-t2-backend -n 40 --no-pager || true
