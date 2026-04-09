@@ -141,6 +141,13 @@ export const getDashboard = async (req, res) => {
     const today = new Date().toISOString().split("T")[0];
     const { weekStart, weekEnd } = getCurrentWeekRange();
 
+    // Fetch student's department memberships (needed for open-shifts filter)
+    const userDepts = await UserDepartment.findAll({
+      where: { user_id: userId, is_active: true },
+      attributes: ["department_id"],
+    });
+    const userDeptIds = userDepts.map((ud) => ud.department_id);
+
     // Run independent queries concurrently
     const [
       todayShifts,
@@ -203,21 +210,24 @@ export const getDashboard = async (req, res) => {
         },
       }),
 
-      // Open shifts (unassigned, published, future)
-      Shift.findAndCountAll({
-        where: {
-          assigned_user_id: null,
-          is_published: true,
-          shift_date: { [Op.gte]: today },
-          [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
-        },
-        include: [
-          { model: Department, as: "department", attributes: ["department_id", "department_name"] },
-          { model: Position, as: "position", attributes: ["position_id", "position_name"] },
-        ],
-        order: [["shift_date", "ASC"], ["start_time", "ASC"]],
-        limit: 3,
-      }),
+      // Open shifts (unassigned, published, future) — only from student's departments
+      userDeptIds.length > 0
+        ? Shift.findAndCountAll({
+            where: {
+              assigned_user_id: null,
+              is_published: true,
+              shift_date: { [Op.gte]: today },
+              department_id: { [Op.in]: userDeptIds },
+              [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+            },
+            include: [
+              { model: Department, as: "department", attributes: ["department_id", "department_name"] },
+              { model: Position, as: "position", attributes: ["position_id", "position_name"] },
+            ],
+            order: [["shift_date", "ASC"], ["start_time", "ASC"]],
+            limit: 3,
+          })
+        : Promise.resolve({ count: 0, rows: [] }),
     ]);
 
     // Derive next shift (first today shift with end_time > now, or first future shift this week)
@@ -388,11 +398,22 @@ export const getOpenShifts = async (req, res) => {
       return ok(res, { count: 0, shifts: [], page, limit });
     }
 
+    // If departmentId filter is provided, verify the student is a member first
+    let targetDeptIds = deptIds;
+    if (departmentId) {
+      const numDeptId = Number(departmentId);
+      if (!deptIds.includes(numDeptId)) {
+        // Student is not a member of this department — return empty
+        return ok(res, { count: 0, shifts: [], page, limit });
+      }
+      targetDeptIds = [numDeptId];
+    }
+
     const where = {
       assigned_user_id: null,
       is_published: true,
       shift_date: { [Op.gte]: startDate || today },
-      department_id: departmentId ? Number(departmentId) : { [Op.in]: deptIds },
+      department_id: { [Op.in]: targetDeptIds },
       [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
     };
     if (endDate) {
