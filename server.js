@@ -28,8 +28,6 @@ import { runSeeds } from "./app/config/seed.js";
 
 
 const app = express();
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // HTTP request logger middleware
 app.use(morgan('combined', { stream: logger.stream }));
