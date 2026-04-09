@@ -329,6 +329,15 @@ export const reviewSwapRequest = async (req, res) => {
       swapReq.reviewed_at = new Date();
       swapReq.updated_at = new Date();
       await swapReq.save({ transaction });
+
+      // Clear the pending_cover flag on the shift (stays assigned to original student)
+      const declinedShift = await db.shift.findByPk(swapReq.requester_shift_id, { transaction });
+      if (declinedShift && declinedShift.trade_status === "pending_cover") {
+        declinedShift.trade_status = null;
+        declinedShift.updated_at = new Date();
+        await declinedShift.save({ transaction });
+      }
+
       await transaction.commit();
 
       const declineMsg = notes
@@ -377,8 +386,9 @@ export const reviewSwapRequest = async (req, res) => {
         return fail(res, "Cannot approve: replacement worker has approved time-off on this date.", 409);
       }
 
-      // Reassign shift to the respondent
+      // Reassign shift to the respondent and clear the cover flag
       shift.assigned_user_id = swapReq.respondent_user_id;
+      shift.trade_status = null;
       shift.updated_at = new Date();
       await shift.save({ transaction });
 

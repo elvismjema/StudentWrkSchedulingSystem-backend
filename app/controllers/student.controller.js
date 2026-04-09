@@ -210,15 +210,25 @@ export const getDashboard = async (req, res) => {
         },
       }),
 
-      // Open shifts (unassigned, published, future) — only from student's departments
+      // Open shifts: unassigned + needing cover — only from student's departments
       userDeptIds.length > 0
         ? Shift.findAndCountAll({
             where: {
-              assigned_user_id: null,
               is_published: true,
               shift_date: { [Op.gte]: today },
               department_id: { [Op.in]: userDeptIds },
-              [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+              [Op.or]: [
+                // Truly unassigned
+                {
+                  assigned_user_id: null,
+                  [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+                },
+                // Needing cover (not the student's own shift)
+                {
+                  trade_status: "pending_cover",
+                  assigned_user_id: { [Op.ne]: userId },
+                },
+              ],
             },
             include: [
               { model: Department, as: "department", attributes: ["department_id", "department_name"] },
@@ -415,22 +425,36 @@ export const getOpenShifts = async (req, res) => {
       targetDeptIds = [numDeptId];
     }
 
+    // Two types of open shifts:
+    // 1. Truly unassigned shifts (assigned_user_id is null)
+    // 2. Shifts needing cover (trade_status = 'pending_cover', assigned to someone else)
+    const dateFilter = { [Op.gte]: startDate || today };
+    if (endDate) dateFilter[Op.lte] = endDate;
+
     const where = {
-      assigned_user_id: null,
       is_published: true,
-      shift_date: { [Op.gte]: startDate || today },
+      shift_date: dateFilter,
       department_id: { [Op.in]: targetDeptIds },
-      [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+      [Op.or]: [
+        // Unassigned open shifts
+        {
+          assigned_user_id: null,
+          [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+        },
+        // Shifts needing cover (not the student's own shift)
+        {
+          trade_status: "pending_cover",
+          assigned_user_id: { [Op.ne]: userId },
+        },
+      ],
     };
-    if (endDate) {
-      where.shift_date = { ...where.shift_date, [Op.lte]: endDate };
-    }
 
     const { count, rows } = await Shift.findAndCountAll({
       where,
       include: [
         { model: Department, as: "department", attributes: ["department_id", "department_name"] },
         { model: Position, as: "position", attributes: ["position_id", "position_name"] },
+        { model: User, as: "assignedUser", attributes: ["id", "fName", "lName"], required: false },
       ],
       order: [["shift_date", "ASC"], ["start_time", "ASC"]],
       limit,
@@ -609,6 +633,11 @@ export const findCover = async (req, res) => {
       created_at: new Date(),
       updated_at: new Date(),
     });
+
+    // Mark the shift as needing cover so it shows up in open-shifts feeds
+    shift.trade_status = "pending_cover";
+    shift.updated_at = new Date();
+    await shift.save();
 
     return ok(res, request, "Cover request posted.", 201);
   } catch (error) {
