@@ -35,6 +35,9 @@ router.get("/admin/users-with-roles", [authenticate, requireManager], userDepart
 // Admin: Assign or update user role
 router.post("/admin/assign-role", [authenticate, requireManager], userDepartment.assignUserRole);
 
+// Manager: Add or reactivate worker membership in managed department
+router.post("/assign-worker", [authenticate, requireManager], userDepartment.assignWorker);
+
 // Admin: Remove user role from department
 router.delete("/admin/remove-role/:id", [authenticate, requireManager], userDepartment.removeUserRole);
 

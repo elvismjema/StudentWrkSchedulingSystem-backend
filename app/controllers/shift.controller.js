@@ -8,6 +8,7 @@ const Availability = db.availability;
 const ShiftAcknowledgement = db.shiftAcknowledgement;
 const ShiftAudit = db.shiftAudit;
 const User = db.user;
+const TimeOffRequest = db.timeOffRequest;
 const Qualification = db.qualification;
 const UserQualification = db.userQualification;
 const PositionQualification = db.positionQualification;
@@ -58,6 +59,103 @@ const withShiftStatus = (shift) => {
   };
 };
 
+const dateFromIso = (isoDate) => new Date(`${isoDate}T00:00:00`);
+const isoFromDate = (date) => date.toISOString().slice(0, 10);
+const addDays = (date, days) => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
+const syncWeeklyRecurringSeries = async (baseShift, actorUserId) => {
+  if (!baseShift?.is_recurring || !baseShift?.shift_date || !baseShift?.recurrence_end_date) return;
+
+  const recurrenceStart = baseShift.recurrence_start_date || baseShift.shift_date;
+  const startDate = dateFromIso(baseShift.shift_date);
+  const endDate = dateFromIso(baseShift.recurrence_end_date);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate < startDate) return;
+
+  // Find existing weekly series rows that belong to this same recurrence group.
+  const existingFutureShifts = await Shift.findAll({
+    where: {
+      shift_id: { [Op.ne]: baseShift.shift_id },
+      department_id: baseShift.department_id,
+      created_by: baseShift.created_by,
+      is_recurring: true,
+      recurrence_pattern: "weekly",
+      recurrence_start_date: recurrenceStart,
+      shift_date: { [Op.gte]: baseShift.shift_date },
+    },
+  });
+
+  const existingByDate = new Map(
+    existingFutureShifts
+      .filter((shift) => !!shift.shift_date)
+      .map((shift) => [shift.shift_date, shift]),
+  );
+
+  const wantedDates = new Set();
+  for (let cursor = addDays(startDate, 7); cursor <= endDate; cursor = addDays(cursor, 7)) {
+    const nextDate = isoFromDate(cursor);
+    wantedDates.add(nextDate);
+
+    const existingShift = existingByDate.get(nextDate);
+    const sharedFields = {
+      department_id: baseShift.department_id,
+      position_id: baseShift.position_id,
+      start_time: baseShift.start_time,
+      end_time: baseShift.end_time,
+      assigned_user_id: baseShift.assigned_user_id || null,
+      trade_status: baseShift.trade_status || null,
+      is_published: !!baseShift.is_published,
+      is_recurring: true,
+      recurrence_pattern: "weekly",
+      recurrence_start_date: recurrenceStart,
+      recurrence_end_date: baseShift.recurrence_end_date,
+      day_of_week: null,
+      is_template: false,
+      template_id: null,
+    };
+
+    if (existingShift) {
+      await existingShift.update(sharedFields);
+    } else {
+      await Shift.create({
+        ...sharedFields,
+        shift_date: nextDate,
+        created_by: actorUserId || baseShift.created_by,
+      });
+    }
+  }
+
+  // If recurrence range was shortened, remove leftover future shifts outside the new range.
+  const obsoleteShiftIds = existingFutureShifts
+    .filter((shift) => shift.shift_date && !wantedDates.has(shift.shift_date))
+    .map((shift) => shift.shift_id);
+
+  if (obsoleteShiftIds.length) {
+    await Shift.destroy({ where: { shift_id: { [Op.in]: obsoleteShiftIds } } });
+  }
+};
+
+const deleteFutureRecurringSeriesShifts = async (seriesSeedShift, cutoffShiftDate) => {
+  const seriesAnchorDate = seriesSeedShift?.recurrence_start_date || seriesSeedShift?.shift_date;
+  const effectiveCutoffDate = cutoffShiftDate || seriesSeedShift?.shift_date;
+  if (!seriesAnchorDate || !effectiveCutoffDate) return 0;
+
+  const where = {
+    shift_id: { [Op.ne]: seriesSeedShift.shift_id },
+    department_id: seriesSeedShift.department_id,
+    created_by: seriesSeedShift.created_by,
+    is_recurring: true,
+    recurrence_pattern: "weekly",
+    recurrence_start_date: seriesAnchorDate,
+    shift_date: { [Op.gt]: effectiveCutoffDate },
+  };
+
+  return Shift.destroy({ where });
+};
+
 const validateDepartmentMembership = async (departmentId, userId, positionId) => {
   if (!departmentId || !userId) {
     return {
@@ -88,14 +186,6 @@ const validateDepartmentMembership = async (departmentId, userId, positionId) =>
       valid: false,
       message: "Assigned user does not have an active role assignment in this department.",
       conflictType: "role_mismatch",
-    };
-  }
-
-  if (positionId && Number(membership.position_id) !== Number(positionId)) {
-    return {
-      valid: false,
-      message: "Assigned user is not qualified for this position in the department.",
-      conflictType: "qualification_mismatch",
     };
   }
 
@@ -152,6 +242,29 @@ const validateAvailabilityCoverage = async (userId, shiftDate, startTime, endTim
   return { valid: true };
 };
 
+const validateApprovedTimeOffCoverage = async (userId, shiftDate) => {
+  if (!shiftDate) return { valid: true };
+
+  const blockingRequest = await TimeOffRequest.findOne({
+    where: {
+      user_id: userId,
+      status: "approved",
+      start_date: { [Op.lte]: shiftDate },
+      end_date: { [Op.gte]: shiftDate },
+    },
+  });
+
+  if (blockingRequest) {
+    return {
+      valid: false,
+      message: "Assigned user has an approved time-off request for this date.",
+      conflictType: "time_off_conflict",
+    };
+  }
+
+  return { valid: true };
+};
+
 const validateAssignmentEligibility = async (
   departmentId,
   assignedUserId,
@@ -173,6 +286,14 @@ const validateAssignmentEligibility = async (
     return departmentValidation;
   }
 
+  const timeOffValidation = await validateApprovedTimeOffCoverage(
+    assignedUserId,
+    shiftDate,
+  );
+  if (!timeOffValidation.valid) {
+    return timeOffValidation;
+  }
+
   return validateAvailabilityCoverage(
     assignedUserId,
     shiftDate,
@@ -180,6 +301,9 @@ const validateAssignmentEligibility = async (
     endTime,
   );
 };
+
+const isAvailabilityConflict = (validationResult) =>
+  !validationResult?.valid && validationResult?.conflictType === "availability_conflict";
 
 /**
  * Thin wrapper that routes through the centralised notification service.
@@ -473,6 +597,7 @@ export const validateBufferTime = async (departmentId, shiftDate, startTime, end
 export const createShift = async (req, res) => {
   try {
     const actorUserId = req.auth?.userId || req.body.created_by;
+    let assignmentWarningMessage = null;
 
     // Validate request
     if (!req.body.department_id || !req.body.position_id || !req.body.start_time || !req.body.end_time || !actorUserId) {
@@ -498,11 +623,15 @@ export const createShift = async (req, res) => {
       );
 
       if (!assignmentValidation.valid) {
+        if (isAvailabilityConflict(assignmentValidation)) {
+          assignmentWarningMessage = assignmentValidation.message;
+        } else {
         return res.status(409).send({
           success: false,
           message: assignmentValidation.message,
           conflictType: assignmentValidation.conflictType,
         });
+        }
       }
     }
 
@@ -569,7 +698,13 @@ export const createShift = async (req, res) => {
       },
     );
 
-    res.status(201).send(withShiftStatus(shiftWithAssociations));
+    const payload = withShiftStatus(shiftWithAssociations);
+    if (assignmentWarningMessage) {
+      payload.warning_message = assignmentWarningMessage;
+      payload.warning_type = "availability_conflict";
+    }
+
+    res.status(201).send(payload);
   } catch (err) {
     res.status(500).send({
       message: err.message || "Some error occurred while creating the Shift.",
@@ -703,6 +838,8 @@ export const updateShift = async (req, res) => {
   const id = req.params.id;
 
   try {
+    let assignmentWarningMessage = null;
+    const actorUserId = req.auth?.userId || req.body.created_by;
     // Get the existing shift first (with associations so we can build change diffs)
     const existingShift = await Shift.findByPk(id, { include: shiftIncludes });
 
@@ -731,11 +868,15 @@ export const updateShift = async (req, res) => {
       );
 
       if (!assignmentValidation.valid) {
+        if (isAvailabilityConflict(assignmentValidation)) {
+          assignmentWarningMessage = assignmentValidation.message;
+        } else {
         return res.status(409).send({
           success: false,
           message: assignmentValidation.message,
           conflictType: assignmentValidation.conflictType,
         });
+        }
       }
     }
 
@@ -759,6 +900,28 @@ export const updateShift = async (req, res) => {
       }
     }
 
+    const isRecurring = req.body.is_recurring !== undefined ? !!req.body.is_recurring : !!existingShift.is_recurring;
+    const turningRecurringOff = !!existingShift.is_recurring && req.body.is_recurring === false;
+    const recurrenceEndDate = req.body.recurrence_end_date !== undefined
+      ? req.body.recurrence_end_date
+      : existingShift.recurrence_end_date;
+    const recurrenceStartDate = req.body.recurrence_start_date !== undefined
+      ? req.body.recurrence_start_date
+      : (req.body.shift_date || existingShift.shift_date);
+
+    if (isRecurring) {
+      if (!recurrenceStartDate || !recurrenceEndDate) {
+        return res.status(400).send({
+          message: "Recurring shifts require recurrence_start_date and recurrence_end_date.",
+        });
+      }
+      if (dateFromIso(recurrenceEndDate) < dateFromIso(recurrenceStartDate)) {
+        return res.status(400).send({
+          message: "Repeat-until date must be on or after the shift date.",
+        });
+      }
+    }
+
     const statusSensitiveFields = [
       "department_id",
       "position_id",
@@ -773,6 +936,19 @@ export const updateShift = async (req, res) => {
     );
 
     const updatePayload = { ...req.body };
+    if (updatePayload.is_recurring === false) {
+      updatePayload.recurrence_pattern = null;
+      updatePayload.recurrence_end_date = null;
+      updatePayload.recurrence_start_date = null;
+    } else if (updatePayload.is_recurring === true && !updatePayload.recurrence_start_date) {
+      // Preserve a stable series identifier across edits.
+      updatePayload.recurrence_start_date = existingShift.recurrence_start_date || existingShift.shift_date;
+    }
+
+    if (updatePayload.trade_status === "open" && updatePayload.assigned_user_id === undefined) {
+      updatePayload.assigned_user_id = null;
+    }
+
     if (changedPublishedShift && updatePayload.trade_status === undefined) {
       updatePayload.trade_status = SHIFT_STATUS.CHANGED;
     }
@@ -782,6 +958,13 @@ export const updateShift = async (req, res) => {
     });
 
     if (num === 1) {
+      let baseShift = await Shift.findByPk(id);
+      if (turningRecurringOff) {
+        await deleteFutureRecurringSeriesShifts(existingShift, baseShift?.shift_date || existingShift.shift_date);
+      } else if (baseShift?.is_recurring) {
+        await syncWeeklyRecurringSeries(baseShift, actorUserId || baseShift.created_by);
+      }
+
       const updatedShift = await Shift.findByPk(id, {
         include: shiftIncludes,
       });
@@ -806,7 +989,13 @@ export const updateShift = async (req, res) => {
         },
       );
 
-      res.send(withShiftStatus(updatedShift));
+      const payload = withShiftStatus(updatedShift);
+      if (assignmentWarningMessage) {
+        payload.warning_message = assignmentWarningMessage;
+        payload.warning_type = "availability_conflict";
+      }
+
+      res.send(payload);
     } else {
       res.status(404).send({
         message: `Cannot update Shift with id=${id}. Shift was not found or req.body is empty!`,

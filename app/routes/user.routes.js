@@ -11,8 +11,14 @@
   // Retrieve all People
   router.get("/", [authenticate], users.findAll);
 
+  // Check if a user exists by email
+  router.get("/check-email/:email", [authenticate], users.findByEmail);
+
   // Deactivate a User account
   router.patch("/:id/deactivate", [authenticate, requireManager], users.deactivateUser);
+
+  // Permanently delete a user from manager flow (department-scoped permission check in controller)
+  router.delete("/:id/permanent-manager", [authenticate, requireManager], users.deleteByManager);
 
   // Retrieve a single User with id
   router.get("/:id", [authenticate], users.findOne);
@@ -25,4 +31,3 @@
 
 
   export default router;
-

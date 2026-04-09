@@ -18,4 +18,5 @@ router.get("/:id", authenticate, getRoleById);
 // Update user role
 router.put("/update-user", authenticate, updateUserRole);
 
+
 export default router;

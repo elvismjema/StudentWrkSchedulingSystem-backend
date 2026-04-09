@@ -30,6 +30,12 @@ import PositionQualification from "./positionQualification.model.js";
 import UserDepartment from "./user_department.model.js";
 import PendingAssignment from "./pending_assignment.model.js";
 
+// ── NEW MODELS for Student Dashboard ─────────────────────────────────────────
+import ShiftSwapRequest from "./shift_swap_request.model.js";
+import TimeOffRequest from "./time_off_request.model.js";
+import BreakRecord from "./break_record.model.js";
+import TimecardApproval from "./timecard_approval.model.js";
+
 
 const db = {};
 db.Sequelize = Sequelize;
@@ -61,6 +67,12 @@ db.userQualification = UserQualification;
 db.positionQualification = PositionQualification;
 db.userDepartment = UserDepartment;
 db.pendingAssignment = PendingAssignment;
+
+// ── NEW MODEL REGISTRATIONS ──────────────────────────────────────────────────
+db.shiftSwapRequest = ShiftSwapRequest;
+db.timeOffRequest = TimeOffRequest;
+db.breakRecord = BreakRecord;
+db.timecardApproval = TimecardApproval;
 
 
 // foreign key for session
@@ -243,6 +255,39 @@ db.shift.hasMany(db.clockRecord, {
   as: "clockRecords"
 });
 
+db.user.hasMany(db.timecardApproval, {
+  foreignKey: "user_id",
+  as: "timecardApprovals",
+});
+
+db.timecardApproval.belongsTo(db.user, {
+  foreignKey: "user_id",
+  as: "user",
+  onDelete: "CASCADE",
+});
+
+db.department.hasMany(db.timecardApproval, {
+  foreignKey: "department_id",
+  as: "timecardApprovals",
+});
+
+db.timecardApproval.belongsTo(db.department, {
+  foreignKey: "department_id",
+  as: "department",
+  onDelete: "CASCADE",
+});
+
+db.user.hasMany(db.timecardApproval, {
+  foreignKey: "decided_by",
+  as: "decidedTimecards",
+});
+
+db.timecardApproval.belongsTo(db.user, {
+  foreignKey: "decided_by",
+  as: "decider",
+  onDelete: "SET NULL",
+});
+
 
 // Department relationships
 db.department.hasMany(db.scheduleTemplate, {
@@ -304,6 +349,12 @@ db.scheduleTemplate.belongsTo(db.user, {
 db.user.hasMany(db.scheduleTemplate, {
   foreignKey: "created_by",
   as: "createdScheduleTemplates"
+});
+
+// Template shifts: Shift records with is_template=true belong to a ScheduleTemplate
+db.scheduleTemplate.hasMany(db.shift, {
+  foreignKey: "template_id",
+  as: "templateShifts"
 });
 
 // Availability relationships
@@ -599,6 +650,102 @@ db.positionQualification.belongsTo(db.qualification, {
   foreignKey: "qualification_id",
   as: "qualification",
   onDelete: "CASCADE",
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// NEW ASSOCIATIONS — Student Dashboard Models
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ── ShiftSwapRequest associations ────────────────────────────────────────────
+db.shiftSwapRequest.belongsTo(db.shift, {
+  foreignKey: "requester_shift_id",
+  as: "requesterShift",
+  onDelete: "CASCADE",
+});
+
+db.shiftSwapRequest.belongsTo(db.shift, {
+  foreignKey: "respondent_shift_id",
+  as: "respondentShift",
+  onDelete: "SET NULL",
+});
+
+db.shiftSwapRequest.belongsTo(db.user, {
+  foreignKey: "requester_user_id",
+  as: "requester",
+  onDelete: "CASCADE",
+});
+
+db.shiftSwapRequest.belongsTo(db.user, {
+  foreignKey: "respondent_user_id",
+  as: "respondent",
+  onDelete: "SET NULL",
+});
+
+db.shiftSwapRequest.belongsTo(db.user, {
+  foreignKey: "reviewed_by",
+  as: "reviewer",
+  onDelete: "SET NULL",
+});
+
+db.shift.hasMany(db.shiftSwapRequest, {
+  foreignKey: "requester_shift_id",
+  as: "swapRequestsAsRequester",
+});
+
+db.shift.hasMany(db.shiftSwapRequest, {
+  foreignKey: "respondent_shift_id",
+  as: "swapRequestsAsRespondent",
+});
+
+db.user.hasMany(db.shiftSwapRequest, {
+  foreignKey: "requester_user_id",
+  as: "outgoingSwapRequests",
+});
+
+db.user.hasMany(db.shiftSwapRequest, {
+  foreignKey: "respondent_user_id",
+  as: "incomingSwapRequests",
+});
+
+// ── TimeOffRequest associations ──────────────────────────────────────────────
+db.timeOffRequest.belongsTo(db.user, {
+  foreignKey: "user_id",
+  as: "user",
+  onDelete: "CASCADE",
+});
+
+db.timeOffRequest.belongsTo(db.user, {
+  foreignKey: "reviewed_by",
+  as: "reviewer",
+  onDelete: "SET NULL",
+});
+
+db.user.hasMany(db.timeOffRequest, {
+  foreignKey: "user_id",
+  as: "timeOffRequests",
+});
+
+// ── BreakRecord associations ─────────────────────────────────────────────────
+db.breakRecord.belongsTo(db.clockRecord, {
+  foreignKey: "clock_record_id",
+  as: "clockRecord",
+  onDelete: "CASCADE",
+});
+
+db.breakRecord.belongsTo(db.user, {
+  foreignKey: "user_id",
+  as: "user",
+  onDelete: "CASCADE",
+});
+
+db.clockRecord.hasMany(db.breakRecord, {
+  foreignKey: "clock_record_id",
+  as: "breaks",
+});
+
+db.user.hasMany(db.breakRecord, {
+  foreignKey: "user_id",
+  as: "breakRecords",
 });
 
 export default db;

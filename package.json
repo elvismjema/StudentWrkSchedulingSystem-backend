@@ -7,7 +7,8 @@
   "scripts": {
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "start": "node server.js",
-    "bundle": "mkdir deploy && cp -r app server.js package.json package-lock.json workerscheduling-t2-backend.service .env deploy"
+    "schema:sync": "node scripts/ensureProductionSchema.mjs",
+    "bundle": "rm -rf deploy && mkdir deploy && cp -r app migrations scripts server.js package.json package-lock.json workerscheduling-t2-backend.service .env deploy"
   },
   "keywords": [
     "node.js",

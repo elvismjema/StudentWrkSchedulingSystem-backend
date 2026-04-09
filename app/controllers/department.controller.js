@@ -6,35 +6,15 @@ const Department = db.department;
 export const getAllDepartments = async (req, res) => {
   try {
     const departments = await Department.findAll({
-      attributes: ['department_id', 'department_name', 'description'],
-      order: [['department_name', 'ASC']]
+      attributes: ["department_id", "department_name", "description"],
+      order: [["department_name", "ASC"]]
     });
     
     res.status(200).json(departments);
   } catch (error) {
-    console.error('Error fetching departments:', error);
+    console.error("Error fetching departments:", error);
     res.status(500).json({
       message: "Error retrieving departments",
-      error: error.message
-    });
-  }
-};
-
-// Retrieve all departments (alias for getAllDepartments)
-export const listDepartments = async (req, res) => {
-  try {
-    const departments = await Department.findAll({
-      order: [["department_name", "ASC"]]
-    });
-
-    return res.status(200).json({
-      success: true,
-      data: departments
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch departments",
       error: error.message
     });
   }
@@ -45,9 +25,7 @@ export const getDepartmentById = async (req, res) => {
   try {
     const { id } = req.params;
     
-    const department = await Department.findByPk(id, {
-      attributes: ['department_id', 'department_name', 'description']
-    });
+    const department = await Department.findByPk(id);
     
     if (!department) {
       return res.status(404).json({
@@ -57,7 +35,7 @@ export const getDepartmentById = async (req, res) => {
     
     res.status(200).json(department);
   } catch (error) {
-    console.error('Error fetching department:', error);
+    console.error("Error fetching department:", error);
     res.status(500).json({
       message: "Error retrieving department",
       error: error.message
@@ -77,7 +55,7 @@ export const createDepartment = async (req, res) => {
       min_staff_required,
       late_threshold_minutes,
       early_threshold_minutes,
-      notify_on_time_discrepancy
+      max_shift_length_hours
     } = req.body;
 
     if (!department_name) {
@@ -96,45 +74,38 @@ export const createDepartment = async (req, res) => {
       min_staff_required,
       late_threshold_minutes,
       early_threshold_minutes,
-      notify_on_time_discrepancy
+      max_shift_length_hours
     });
 
-    return res.status(201).json({
-      success: true,
-      data: department
-    });
+    res.status(201).json(department);
   } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Failed to create department",
+    console.error("Error creating department:", error);
+    res.status(500).json({
+      message: "Error creating department",
       error: error.message
     });
   }
 };
 
-// Update department
+// Update a department by the id in the request
 export const updateDepartment = async (req, res) => {
   try {
     const { id } = req.params;
-    const { department_name, description } = req.body;
     
-    const department = await Department.findByPk(id);
-    
-    if (!department) {
+    const [updatedRowsCount] = await Department.update(req.body, {
+      where: { department_id: id }
+    });
+
+    if (updatedRowsCount === 0) {
       return res.status(404).json({
-        message: "Department not found"
+        message: "Department not found or no changes made"
       });
     }
-    
-    await department.update({
-      department_name: department_name || department.department_name,
-      description: description || department.description
-    });
-    
-    const updatedDepartment = await department.reload();
+
+    const updatedDepartment = await Department.findByPk(id);
     res.status(200).json(updatedDepartment);
   } catch (error) {
-    console.error('Error updating department:', error);
+    console.error("Error updating department:", error);
     res.status(500).json({
       message: "Error updating department",
       error: error.message
@@ -142,46 +113,28 @@ export const updateDepartment = async (req, res) => {
   }
 };
 
-// Delete department
+// Delete a department with the specified id in the request
 export const deleteDepartment = async (req, res) => {
   try {
     const { id } = req.params;
     
-    const department = await Department.findByPk(id);
-    
-    if (!department) {
+    const deletedRowsCount = await Department.destroy({
+      where: { department_id: id }
+    });
+
+    if (deletedRowsCount === 0) {
       return res.status(404).json({
         message: "Department not found"
       });
     }
-    
-    await department.destroy();
-    
+
     res.status(200).json({
       message: "Department deleted successfully"
     });
   } catch (error) {
-    console.error('Error deleting department:', error);
+    console.error("Error deleting department:", error);
     res.status(500).json({
       message: "Error deleting department",
-      error: error.message
-    });
-  }
-};
-
-// Remove all departments
-export const removeAllDepartments = async (req, res) => {
-  try {
-    const count = await Department.destroy({ where: {} });
-
-    return res.status(200).json({
-      success: true,
-      message: `${count} department(s) removed successfully`
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Failed to remove departments",
       error: error.message
     });
   }

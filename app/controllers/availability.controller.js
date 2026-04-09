@@ -1,5 +1,6 @@
 import db from "../models/index.js";
 import logger from "../config/logger.js";
+import { resolveHighestRoleForUser } from "../authorization/roleAccess.js";
 
 const Availability = db.availability;
 const User = db.user;
@@ -106,7 +107,28 @@ const markConflicts = (records) => {
   }));
 };
 
-// Create and Save a new Availability
+/**
+ * Helper: check if the authenticated user is allowed to act on behalf of targetUserId.
+ * Students can only act on their own data. Managers/admins can act on anyone's.
+ * @returns {{ allowed: boolean, role: string }}
+ */
+const checkOwnership = async (req, targetUserId) => {
+  const authUserId = Number(req.auth?.userId);
+  const authEmail = req.auth?.email;
+  if (authUserId === Number(targetUserId)) {
+    return { allowed: true, role: "self" };
+  }
+  const role = await resolveHighestRoleForUser(authUserId, authEmail);
+  if (role === "manager" || role === "admin") {
+    return { allowed: true, role };
+  }
+  return { allowed: false, role };
+};
+
+/**
+ * Create and Save a new Availability.
+ * FIX: Added ownership validation — students can only create availability for themselves.
+ */
 exports.create = async (req, res) => {
   // Validate request
   if (!req.body.userId || !req.body.startTime || !req.body.endTime) {
@@ -115,6 +137,14 @@ exports.create = async (req, res) => {
       message: "userId, startTime, and endTime are required!",
     });
     return;
+  }
+
+  // FIX: Ownership check — students can only create their own availability
+  const { allowed } = await checkOwnership(req, req.body.userId);
+  if (!allowed) {
+    return res.status(403).send({
+      message: "Forbidden! You can only create availability for your own account.",
+    });
   }
 
   const timeValidation = validateTimeRange(req.body.startTime, req.body.endTime);
@@ -189,7 +219,7 @@ exports.findAll = async (req, res) => {
   const startTimeTo = req.query.startTimeTo;
 
   const condition = {};
-  
+
   if (userId) {
     condition.userId = userId;
   }
@@ -232,7 +262,7 @@ exports.findAll = async (req, res) => {
   logger.debug(`Fetching availabilities with condition: ${JSON.stringify(condition)}`);
 
   try {
-    const data = await Availability.findAll({ 
+    const data = await Availability.findAll({
       where: condition,
       include: [
         {
@@ -266,20 +296,8 @@ exports.findAllForUser = async (req, res) => {
   logger.debug(`Fetching availabilities for user: ${userId}`);
 
   try {
-    // Get student's active department first
-    const { getStudentActiveDepartment } = await import('./user_department.controller.js');
-    const activeDepartment = await getStudentActiveDepartment(userId);
-    
-    let condition = { userId };
-    
-    // If student has active department, filter by it
-    if (activeDepartment) {
-      condition.departmentId = activeDepartment.department_id;
-      logger.debug(`Filtering availabilities by student's active department: ${activeDepartment.department_id}`);
-    }
-
-    const data = await Availability.findAll({ 
-      where: condition,
+    const data = await Availability.findAll({
+      where: { userId: userId },
       include: [
         {
           model: db.user,
@@ -339,7 +357,10 @@ exports.findOne = (req, res) => {
     });
 };
 
-// Update an Availability by the id
+/**
+ * Update an Availability by the id.
+ * FIX: Added ownership validation — students can only update their own availability.
+ */
 exports.update = async (req, res) => {
   const id = req.params.id;
 
@@ -353,6 +374,14 @@ exports.update = async (req, res) => {
         message: `Cannot find Availability with id=${id}.`,
       });
       return;
+    }
+
+    // FIX: Ownership check — students can only update their own availability
+    const { allowed } = await checkOwnership(req, existing.userId);
+    if (!allowed) {
+      return res.status(403).send({
+        message: "Forbidden! You can only update your own availability.",
+      });
     }
 
     const effectiveStartTime = req.body.startTime || existing.startTime;
@@ -413,7 +442,7 @@ exports.update = async (req, res) => {
     }
 
     logger.warn(`Cannot update availability with id ${id}. Availability not found or req.body is empty`);
-    res.send({
+    res.status(404).send({
       message: `Cannot update Availability with id=${id}. Maybe Availability was not found or req.body is empty!`,
     });
   } catch (err) {
@@ -441,7 +470,7 @@ exports.delete = (req, res) => {
         });
       } else {
         logger.warn(`Cannot delete availability with id ${id}. Availability not found`);
-        res.send({
+        res.status(404).send({
           message: `Cannot delete Availability with id=${id}. Maybe Availability was not found!`,
         });
       }
@@ -510,7 +539,7 @@ exports.updateStatus = (req, res) => {
         });
       } else {
         logger.warn(`Cannot update availability status with id ${id}`);
-        res.send({
+        res.status(404).send({
           message: `Cannot update Availability status with id=${id}. Maybe Availability was not found!`,
         });
       }

@@ -13,6 +13,7 @@ const dbConfig = {
   DB: db_name,
   PORT: db_port,
   dialect: "mysql",
+  timezone: "-06:00",
   pool: {
     max: 5,
     min: 0,

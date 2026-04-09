@@ -417,4 +417,346 @@ exports.getDepartmentMembers = async (req, res) => {
   }
 };
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const classifyRole = (role) => {
+  const roleName = String(role?.role_name || "").toLowerCase();
+  const permissionLevel = Number(role?.permission_level || 0);
+  if (roleName.includes("admin") || permissionLevel >= 100) return "admin";
+  if (roleName.includes("manager") || roleName.includes("supervisor") || permissionLevel >= 50) return "manager";
+  return "student";
+};
+
+// Admin: Assign a manager or student worker to a single department.
+// Enforces the one-department rule: all existing non-admin memberships (and future shifts within
+// those departments) are removed before the new assignment is created.
+exports.assignDepartment = async (req, res) => {
+  const userId = Number(req.body?.user_id);
+  const departmentId = Number(req.body?.department_id);
+  let roleId = Number(req.body?.role_id) || null;
+  const rawPositionId = req.body?.position_id;
+  const positionId =
+    rawPositionId == null || rawPositionId === "" ? null : Number(rawPositionId);
+  // role_name + permission_level are accepted as fallback when role_id is absent
+  const roleName = req.body?.role_name ? String(req.body.role_name).trim() : null;
+  const rolePermissionLevel = req.body?.permission_level != null ? Number(req.body.permission_level) : null;
+
+  if (!userId || !departmentId) {
+    return res.status(400).json({
+      success: false,
+      message: "user_id and department_id are required.",
+    });
+  }
+
+  if (!roleId && !roleName) {
+    return res.status(400).json({
+      success: false,
+      message: "Either role_id or role_name must be provided.",
+    });
+  }
+
+  try {
+    // If role_id is absent, resolve (or create) the role by name for this department
+    let role;
+    let user;
+    let department;
+
+    [user, department] = await Promise.all([
+      User.findByPk(userId),
+      Department.findByPk(departmentId),
+    ]);
+
+    if (roleId) {
+      role = await Role.findByPk(roleId);
+    } else {
+      // findOrCreate using name so synthesised dropdown entries are handled
+      const [foundRole] = await Role.findOrCreate({
+        where: { department_id: departmentId, role_name: roleName },
+        defaults: {
+          department_id: departmentId,
+          role_name: roleName,
+          permission_level: rolePermissionLevel ?? 10,
+          description: null,
+        },
+      });
+      role = foundRole;
+      roleId = role.role_id;
+    }
+
+    if (!user) return res.status(404).json({ success: false, message: "User not found." });
+    if (!role) return res.status(404).json({ success: false, message: "Role not found." });
+    if (!department) return res.status(404).json({ success: false, message: "Department not found." });
+
+    const roleClassification = classifyRole(role);
+    const isNonAdminRole = roleClassification !== "admin";
+
+    let removedShiftCount = 0;
+    let removedMembershipCount = 0;
+    const removedDepartments = [];
+
+    if (isNonAdminRole) {
+      // Find all active memberships for this user
+      const existingMemberships = await UserDepartment.findAll({
+        where: { user_id: userId, is_active: true },
+        include: [
+          {
+            model: Role,
+            as: "role",
+            attributes: ["role_id", "permission_level"],
+          },
+        ],
+      });
+
+      const Op = db.Sequelize.Op;
+      const today = new Date().toISOString().split("T")[0];
+
+      for (const membership of existingMemberships) {
+        const membershipRoleLevel = Number(membership.role?.permission_level || 0);
+        // Keep admin-level memberships and skip the target department
+        if (membershipRoleLevel >= 90) continue;
+        if (Number(membership.department_id) === departmentId) continue;
+
+        // Unassign user from future shifts in this old department
+        const [affectedShifts] = await db.shift.update(
+          { assigned_user_id: null },
+          {
+            where: {
+              assigned_user_id: userId,
+              department_id: membership.department_id,
+              shift_date: { [Op.gte]: today },
+            },
+          },
+        );
+        removedShiftCount += affectedShifts;
+
+        // Deactivate old membership
+        membership.is_active = false;
+        membership.deactivated_at = new Date();
+        await membership.save();
+        removedMembershipCount++;
+
+        // Record old department name for response / notifications
+        const oldDept = await Department.findByPk(membership.department_id, {
+          attributes: ["department_name"],
+        });
+        if (oldDept) removedDepartments.push(oldDept.department_name);
+      }
+    }
+
+    // Create or update the new department membership
+    let membership = await UserDepartment.findOne({
+      where: { user_id: userId, department_id: departmentId, is_active: true },
+    });
+
+    if (membership) {
+      membership.role_id = roleId;
+      if (positionId !== null) membership.position_id = positionId;
+      await membership.save();
+    } else {
+      membership = await UserDepartment.create({
+        user_id: userId,
+        department_id: departmentId,
+        role_id: roleId,
+        position_id: positionId,
+        is_active: true,
+        request_status: "approved",
+        assigned_at: new Date(),
+      });
+    }
+
+    // ── Notifications ───────────────────────────────────────────────────────
+    const Notification = db.notification;
+
+    // Notify the assigned user
+    await Notification.create({
+      title: "Department Assignment",
+      message: `You have been assigned to ${department.department_name} as ${role.role_name}.`,
+      userId,
+      isRead: false,
+    });
+
+    // If assigning a student/worker, notify the managers of the new department
+    if (roleClassification === "student") {
+      const managerMemberships = await UserDepartment.findAll({
+        where: { department_id: departmentId, is_active: true },
+        include: [
+          {
+            model: Role,
+            as: "role",
+            attributes: ["role_id", "permission_level"],
+          },
+        ],
+      });
+
+      for (const managerMembership of managerMemberships) {
+        const managerId = Number(managerMembership.user_id);
+        const managerRoleLevel = Number(managerMembership.role?.permission_level || 0);
+        if (managerRoleLevel >= 50 && managerRoleLevel < 90 && managerId !== userId) {
+          await Notification.create({
+            title: "New Student Worker Assigned",
+            message: `${user.fName} ${user.lName} has been assigned to ${department.department_name}.`,
+            userId: managerId,
+            isRead: false,
+          });
+        }
+      }
+    }
+
+    logger.info(
+      `Admin assigned user id=${userId} to department id=${departmentId} role id=${roleId}. Removed ${removedMembershipCount} old memberships, ${removedShiftCount} future shifts unassigned.`,
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: `${user.fName} ${user.lName} has been assigned to ${department.department_name} as ${role.role_name}.`,
+      data: {
+        membership,
+        removed_memberships: removedMembershipCount,
+        removed_shifts: removedShiftCount,
+        removed_departments: removedDepartments,
+      },
+    });
+  } catch (err) {
+    logger.error(`Admin assignDepartment error: ${err.message}`);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to assign department.",
+      error: err.message,
+    });
+  }
+};
+
+// Admin: promote a user to site-wide admin.
+// Sets user.role = 'admin', deactivates all non-admin dept memberships, unassigns future shifts.
+exports.promoteToAdmin = async (req, res) => {
+  const userId = Number(req.params.userId);
+  const requestingUserId = Number(req.auth?.userId);
+
+  if (!userId) {
+    return res.status(400).json({ success: false, message: "Valid userId is required." });
+  }
+
+  if (userId === requestingUserId) {
+    return res.status(400).json({ success: false, message: "You cannot promote yourself." });
+  }
+
+  try {
+    const user = await User.findByPk(userId);
+    if (!user) return res.status(404).json({ success: false, message: "User not found." });
+
+    if (user.role === "admin") {
+      return res.status(400).json({ success: false, message: `${user.fName} ${user.lName} is already an admin.` });
+    }
+
+    const Op = db.Sequelize.Op;
+    const today = new Date().toISOString().split("T")[0];
+
+    // Deactivate all active non-admin department memberships and unassign future shifts
+    const memberships = await UserDepartment.findAll({
+      where: { user_id: userId, is_active: true },
+      include: [{ model: Role, as: "role", attributes: ["role_id", "permission_level"] }],
+    });
+
+    let removedShiftCount = 0;
+    let removedMembershipCount = 0;
+
+    for (const membership of memberships) {
+      const level = Number(membership.role?.permission_level || 0);
+      if (level >= 100) continue; // already admin-level — leave intact
+
+      const [affected] = await db.shift.update(
+        { assigned_user_id: null },
+        {
+          where: {
+            assigned_user_id: userId,
+            department_id: membership.department_id,
+            shift_date: { [Op.gte]: today },
+          },
+        },
+      );
+      removedShiftCount += affected;
+
+      membership.is_active = false;
+      membership.deactivated_at = new Date();
+      await membership.save();
+      removedMembershipCount++;
+    }
+
+    // Set global admin flag
+    user.role = "admin";
+    await user.save();
+
+    // Notify the promoted user
+    const Notification = db.notification;
+    await Notification.create({
+      title: "Admin Access Granted",
+      message: "You have been granted site-wide admin access.",
+      userId,
+      isRead: false,
+    });
+
+    logger.info(
+      `Admin id=${requestingUserId} promoted user id=${userId} to admin. Removed ${removedMembershipCount} memberships, ${removedShiftCount} future shifts unassigned.`,
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: `${user.fName} ${user.lName} has been promoted to admin.`,
+      data: { removed_memberships: removedMembershipCount, removed_shifts: removedShiftCount },
+    });
+  } catch (err) {
+    logger.error(`Admin promoteToAdmin error: ${err.message}`);
+    return res.status(500).json({ success: false, message: "Failed to promote user.", error: err.message });
+  }
+};
+
+// Admin: get roles for a department (excludes admin-level, used for the assign-department dialog)
+exports.getDepartmentRoles = async (req, res) => {  const departmentId = Number(req.params.departmentId);
+
+  if (!departmentId) {
+    return res.status(400).json({ success: false, message: "Valid departmentId is required." });
+  }
+
+  try {
+    // Ensure the standard Student and Manager roles exist for this department
+    // and build the response directly from each findOrCreate result so that
+    // a missing Manager is never silently dropped by a subsequent findAll.
+    const standardRoles = [
+      { role_name: "Student", permission_level: 10, description: "Student worker with basic scheduling access" },
+      { role_name: "Manager", permission_level: 60, description: "Department manager with scheduling and approval permissions" },
+    ];
+
+    const result = [];
+    for (const template of standardRoles) {
+      try {
+        const [role, created] = await Role.findOrCreate({
+          where: { department_id: departmentId, role_name: template.role_name },
+          defaults: {
+            department_id: departmentId,
+            role_name: template.role_name,
+            permission_level: template.permission_level,
+            description: template.description,
+          },
+        });
+        result.push(role);
+      } catch (innerErr) {
+        // findOrCreate failed — fall back to a plain find
+        const existing = await Role.findOne({
+          where: { department_id: departmentId, role_name: template.role_name },
+        });
+        if (existing) {
+          result.push(existing);
+        }
+      }
+    }
+
+    // Filter out true admin-level roles (permission_level >= 100) before returning
+    const filtered = result.filter((r) => Number(r.permission_level) < 100);
+
+    return res.status(200).json({ success: true, data: filtered });
+  } catch (err) {
+    logger.error(`Admin getDepartmentRoles error: ${err.message}`);
+    return res.status(500).json({ success: false, message: "Failed to retrieve roles.", error: err.message });
+  }
+};
+
 export default exports;

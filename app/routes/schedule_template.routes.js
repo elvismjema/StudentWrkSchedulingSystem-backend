@@ -5,27 +5,28 @@ import {
   getScheduleTemplateById,
   updateScheduleTemplate,
   setScheduleTemplateActiveStatus,
-  deleteScheduleTemplate
+  deleteScheduleTemplate,
+  duplicateScheduleTemplate,
+  checkTemplateConflicts,
+  publishTemplate,
 } from '../controllers/schedule_template.controller.js';
+import authenticate from '../authorization/authorization.js';
+import requireManager from '../authorization/requireManager.js';
 
 const router = express.Router();
 
-// Create a new schedule template
-router.post('/', createScheduleTemplate);
+// ── Read (any authenticated user) ────────────────────────────────────────────
+router.get('/', [authenticate], listScheduleTemplates);
+router.get('/:id', [authenticate], getScheduleTemplateById);
+router.get('/:id/conflicts', [authenticate], checkTemplateConflicts);
 
-// Get all schedule templates with optional filters
-router.get('/', listScheduleTemplates);
-
-// Get a single schedule template by ID
-router.get('/:id', getScheduleTemplateById);
-
-// Update a schedule template
-router.put('/:id', updateScheduleTemplate);
-
-// Set schedule template active status
-router.patch('/:id/active', setScheduleTemplateActiveStatus);
-
-// Delete a schedule template
-router.delete('/:id', deleteScheduleTemplate);
+// ── Write (managers only) ─────────────────────────────────────────────────────
+router.post('/', [authenticate, requireManager], createScheduleTemplate);
+router.put('/:id', [authenticate, requireManager], updateScheduleTemplate);
+router.patch('/:id/active', [authenticate, requireManager], setScheduleTemplateActiveStatus);
+router.delete('/:id', [authenticate, requireManager], deleteScheduleTemplate);
+router.post('/:id/duplicate', [authenticate, requireManager], duplicateScheduleTemplate);
+router.post('/:id/publish', [authenticate, requireManager], publishTemplate);
 
 export default router;
+
