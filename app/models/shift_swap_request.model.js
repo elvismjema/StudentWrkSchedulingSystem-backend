@@ -50,7 +50,6 @@ const ShiftSwapRequest = sequelize.define(
         "declined",
         "cancelled",
         "manager_pending",
-        "cover_approved",
         "approved",
         "rejected"
       ),
