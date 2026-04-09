@@ -84,4 +84,5 @@ jobs:
             sudo cp workerscheduling-t2-backend.service /etc/systemd/system/workerscheduling-t2-backend.service
             sudo systemctl daemon-reload
             sudo systemctl enable workerscheduling-t2-backend
+            sudo systemctl reset-failed workerscheduling-t2-backend || true
             sudo systemctl restart workerscheduling-t2-backend
