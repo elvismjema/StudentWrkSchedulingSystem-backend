@@ -365,7 +365,12 @@ export const reviewSwapRequest = async (req, res) => {
       swapReq.updated_at = new Date();
       await swapReq.save({ transaction });
 
+      // Clear the original worker's assignment so the shift appears as truly
+      // unassigned — this makes it show up in the manager's Unfilled Shifts
+      // dashboard and removes Michael's name from the Assigned Worker display.
+      // The swap request record already preserves who the original requester was.
       shift.trade_status = "approved_cover";
+      shift.assigned_user_id = null;
       shift.updated_at = new Date();
       await shift.save({ transaction });
 
