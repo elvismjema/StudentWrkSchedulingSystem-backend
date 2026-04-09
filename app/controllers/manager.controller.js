@@ -19,6 +19,20 @@ const getDepartmentScope = async (req) => {
   return [...new Set(managedDepartmentIds.map((id) => Number(id)).filter(Boolean))];
 };
 
+const hasApprovedTimeOffForDate = async (userId, shiftDate, transaction) => {
+  if (!userId || !shiftDate) return false;
+  const request = await db.timeOffRequest.findOne({
+    where: {
+      user_id: userId,
+      status: "approved",
+      start_date: { [Op.lte]: shiftDate },
+      end_date: { [Op.gte]: shiftDate },
+    },
+    transaction,
+  });
+  return Boolean(request);
+};
+
 export const getManagerOverview = async (req, res) => {
   try {
     const departmentIds = await getDepartmentScope(req);
@@ -336,6 +350,16 @@ export const reviewSwapRequest = async (req, res) => {
         return fail(res, "Shift no longer exists.", 404);
       }
 
+      const responderHasTimeOff = await hasApprovedTimeOffForDate(
+        swapReq.respondent_user_id,
+        shift.shift_date,
+        transaction,
+      );
+      if (responderHasTimeOff) {
+        await transaction.rollback();
+        return fail(res, "Cannot approve: replacement worker has approved time-off on this date.", 409);
+      }
+
       // Reassign shift to the respondent
       shift.assigned_user_id = swapReq.respondent_user_id;
       shift.updated_at = new Date();
@@ -389,6 +413,21 @@ export const reviewSwapRequest = async (req, res) => {
       return fail(res, "One or both shifts no longer exist.", 404);
     }
 
+    const requesterTargetHasTimeOff = await hasApprovedTimeOffForDate(
+      resShift.assigned_user_id,
+      reqShift.shift_date,
+      transaction,
+    );
+    const respondentTargetHasTimeOff = await hasApprovedTimeOffForDate(
+      reqShift.assigned_user_id,
+      resShift.shift_date,
+      transaction,
+    );
+    if (requesterTargetHasTimeOff || respondentTargetHasTimeOff) {
+      await transaction.rollback();
+      return fail(res, "Cannot approve swap due to approved time-off conflict.", 409);
+    }
+
     const tempUser = reqShift.assigned_user_id;
     reqShift.assigned_user_id = resShift.assigned_user_id;
     resShift.assigned_user_id = tempUser;
@@ -426,5 +465,243 @@ export const reviewSwapRequest = async (req, res) => {
     await transaction.rollback();
     logger.error(`[ManagerController] reviewSwapRequest error: ${error.message}`);
     return fail(res, "Error processing swap request.", 500);
+  }
+};
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TIME-OFF APPROVAL
+// ═════════════════════════════════════════════════════════════════════════════
+
+export const getManagerTimeOffRequests = async (req, res) => {
+  try {
+    const departmentIds = await getDepartmentScope(req);
+    if (!departmentIds.length) return ok(res, []);
+
+    const where = {};
+    if (req.query.status) where.status = String(req.query.status).toLowerCase();
+
+    const requests = await db.timeOffRequest.findAll({
+      where,
+      include: [
+        {
+          model: db.user,
+          as: "user",
+          attributes: ["id", "fName", "lName", "email"],
+          required: true,
+          include: [
+            {
+              model: db.userDepartment,
+              as: "userDepartments",
+              attributes: ["department_id", "is_active", "request_status"],
+              required: true,
+              where: {
+                department_id: { [Op.in]: departmentIds },
+                is_active: true,
+                request_status: "approved",
+              },
+              include: [
+                {
+                  model: db.department,
+                  as: "department",
+                  attributes: ["department_id", "department_name"],
+                  required: false,
+                },
+              ],
+            },
+          ],
+        },
+        {
+          model: db.user,
+          as: "reviewer",
+          attributes: ["id", "fName", "lName", "email"],
+          required: false,
+        },
+      ],
+      order: [["created_at", "DESC"]],
+    });
+
+    return ok(res, requests);
+  } catch (error) {
+    logger.error(`[ManagerController] getManagerTimeOffRequests error: ${error.message}`);
+    return fail(res, "Error retrieving time-off requests.", 500);
+  }
+};
+
+export const reviewManagerTimeOffRequest = async (req, res) => {
+  try {
+    const managerId = req.auth?.userId;
+    const requestId = Number(req.params.id);
+    const action = String(req.body?.action || "").toLowerCase();
+    const notes = req.body?.notes || null;
+
+    if (!["approve", "reject"].includes(action)) {
+      return fail(res, "action must be 'approve' or 'reject'.", 400);
+    }
+
+    const departmentIds = await getDepartmentScope(req);
+    const request = await db.timeOffRequest.findByPk(requestId, {
+      include: [
+        {
+          model: db.user,
+          as: "user",
+          attributes: ["id", "fName", "lName", "email"],
+          include: [
+            {
+              model: db.userDepartment,
+              as: "userDepartments",
+              attributes: ["department_id", "is_active", "request_status"],
+              required: true,
+              where: {
+                department_id: { [Op.in]: departmentIds },
+                is_active: true,
+                request_status: "approved",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    if (!request) return fail(res, "Time-off request not found in your departments.", 404);
+    if (request.status !== "pending") return fail(res, `Request is already "${request.status}".`, 409);
+
+    request.status = action === "approve" ? "approved" : "rejected";
+    request.reviewed_by = managerId;
+    request.reviewed_at = new Date();
+    request.review_notes = notes;
+    request.updated_at = new Date();
+    await request.save();
+
+    return ok(res, request, `Time-off request ${request.status}.`);
+  } catch (error) {
+    logger.error(`[ManagerController] reviewManagerTimeOffRequest error: ${error.message}`);
+    return fail(res, "Error reviewing time-off request.", 500);
+  }
+};
+
+// ═════════════════════════════════════════════════════════════════════════════
+// OPEN SHIFT CLAIM APPROVAL
+// ═════════════════════════════════════════════════════════════════════════════
+
+export const getManagerOpenShiftClaims = async (req, res) => {
+  try {
+    const departmentIds = await getDepartmentScope(req);
+    if (!departmentIds.length) return ok(res, []);
+
+    const where = {
+      type: "find_cover",
+      status: "manager_pending",
+    };
+
+    const claims = await db.shiftSwapRequest.findAll({
+      where,
+      include: [
+        {
+          model: db.shift,
+          as: "requesterShift",
+          where: {
+            department_id: { [Op.in]: departmentIds },
+            assigned_user_id: null,
+          },
+          required: true,
+          include: [
+            { model: db.department, as: "department", attributes: ["department_id", "department_name"] },
+            { model: db.position, as: "position", attributes: ["position_id", "position_name"] },
+          ],
+        },
+        {
+          model: db.user,
+          as: "requester",
+          attributes: ["id", "fName", "lName", "email"],
+          required: true,
+        },
+      ],
+      order: [["created_at", "DESC"]],
+    });
+
+    return ok(res, claims);
+  } catch (error) {
+    logger.error(`[ManagerController] getManagerOpenShiftClaims error: ${error.message}`);
+    return fail(res, "Error retrieving open shift claims.", 500);
+  }
+};
+
+export const reviewManagerOpenShiftClaim = async (req, res) => {
+  const transaction = await db.sequelize.transaction();
+  try {
+    const managerId = req.auth?.userId;
+    const claimId = Number(req.params.id);
+    const action = String(req.body?.action || "").toLowerCase();
+    const notes = req.body?.notes || null;
+
+    if (!["approve", "reject"].includes(action)) {
+      await transaction.rollback();
+      return fail(res, "action must be 'approve' or 'reject'.", 400);
+    }
+
+    const departmentIds = await getDepartmentScope(req);
+    const claim = await db.shiftSwapRequest.findByPk(claimId, { transaction });
+    if (!claim) {
+      await transaction.rollback();
+      return fail(res, "Open shift claim not found.", 404);
+    }
+
+    if (claim.type !== "find_cover" || claim.status !== "manager_pending") {
+      await transaction.rollback();
+      return fail(res, "This request is not a pending open-shift claim.", 409);
+    }
+
+    const shift = await db.shift.findByPk(claim.requester_shift_id, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+
+    if (!shift || !departmentIds.includes(Number(shift.department_id))) {
+      await transaction.rollback();
+      return fail(res, "You do not have permission to review this claim.", 403);
+    }
+
+    if (action === "approve") {
+      if (shift.assigned_user_id) {
+        await transaction.rollback();
+        return fail(res, "Shift is no longer open.", 409);
+      }
+
+      const claimantHasTimeOff = await hasApprovedTimeOffForDate(
+        claim.requester_user_id,
+        shift.shift_date,
+        transaction,
+      );
+      if (claimantHasTimeOff) {
+        await transaction.rollback();
+        return fail(res, "Cannot approve claim: worker has approved time-off on this date.", 409);
+      }
+
+      shift.assigned_user_id = claim.requester_user_id;
+      shift.updated_at = new Date();
+      await shift.save({ transaction });
+
+      await db.shiftAcknowledgement.create(
+        { shiftId: shift.shift_id, userId: claim.requester_user_id, acknowledged: false },
+        { transaction },
+      );
+
+      claim.status = "approved";
+    } else {
+      claim.status = "rejected";
+    }
+
+    claim.manager_notes = notes;
+    claim.reviewed_by = managerId;
+    claim.reviewed_at = new Date();
+    claim.updated_at = new Date();
+    await claim.save({ transaction });
+
+    await transaction.commit();
+    return ok(res, claim, `Open shift claim ${claim.status}.`);
+  } catch (error) {
+    await transaction.rollback();
+    logger.error(`[ManagerController] reviewManagerOpenShiftClaim error: ${error.message}`);
+    return fail(res, "Error reviewing open shift claim.", 500);
   }
 };
