@@ -560,7 +560,7 @@ export const claimOpenShift = async (req, res) => {
         where: {
           requester_shift_id: shiftId,
           type: "find_cover",
-          status: "cover_approved",
+          status: "accepted",
         },
         transaction,
         lock: transaction.LOCK.UPDATE,
@@ -681,7 +681,7 @@ export const findCover = async (req, res) => {
       where: {
         requester_shift_id: shiftId,
         requester_user_id: userId,
-        status: { [Op.in]: ["pending", "cover_approved", "manager_pending"] },
+        status: { [Op.in]: ["pending", "accepted", "manager_pending"] },
       },
     });
     if (existing) {

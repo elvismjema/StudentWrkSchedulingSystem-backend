@@ -358,7 +358,7 @@ export const reviewSwapRequest = async (req, res) => {
       }
 
       // Approve Stage 1 — make the shift visible as an open shift
-      swapReq.status = "cover_approved";
+      swapReq.status = "accepted";
       swapReq.manager_notes = notes || null;
       swapReq.reviewed_by = managerId;
       swapReq.reviewed_at = new Date();
@@ -399,7 +399,7 @@ export const reviewSwapRequest = async (req, res) => {
 
       if (action === "decline") {
         // Deny the pickup — shift goes back to being open for other volunteers
-        swapReq.status = "cover_approved";
+        swapReq.status = "accepted";
         swapReq.respondent_user_id = null;
         swapReq.respondent_notes = null;
         swapReq.manager_notes = notes || null;
