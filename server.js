@@ -80,8 +80,11 @@ const addMissingColumns = async () => {
     `);
     logger.info("Ensured timecard_approvals table exists");
   } catch (err) {
-    logger.error(`Failed ensuring timecard_approvals table: ${err.message}`);
-    throw err;
+    // Log but do NOT throw — if the production DB user lacks CREATE TABLE privilege
+    // (common in prod) this would crash the server on every startup and trip
+    // systemd's restart burst limit, leaving the server permanently down (503).
+    // The migration must be applied separately via `npx sequelize-cli db:migrate`.
+    logger.warn(`Could not ensure timecard_approvals table (may need manual migration): ${err.message}`);
   }
 };
 
