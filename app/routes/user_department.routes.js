@@ -11,6 +11,9 @@ router.get("/departments", [authenticate], userDepartment.listAvailableDepartmen
 // Submit a department join request
 router.post("/", [authenticate], userDepartment.submitJoinRequest);
 
+// Get user's active department
+router.get("/active-department/:userId", [authenticate], userDepartment.getStudentActiveDepartment);
+
 // List all departments for a specific user
 router.get("/user/:userId", [authenticate], userDepartment.listUserDepartments);
 

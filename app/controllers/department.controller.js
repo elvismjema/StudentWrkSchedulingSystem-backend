@@ -60,7 +60,8 @@ export const createDepartment = async (req, res) => {
 
     if (!department_name) {
       return res.status(400).json({
-        message: "Department name is required"
+        success: false,
+        message: "Missing required field: department_name"
       });
     }
 

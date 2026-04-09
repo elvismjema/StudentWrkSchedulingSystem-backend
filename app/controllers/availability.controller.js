@@ -300,11 +300,12 @@ exports.findAllForUser = async (req, res) => {
       where: { userId: userId },
       include: [
         {
-          model: User,
-          as: 'approver',
-          attributes: ['id', 'fName', 'lName', 'email']
-        }
-      ]
+          model: db.user,
+          as: "user",
+          attributes: ["id", "fName", "lName", "email"],
+        },
+      ],
+      order: [["specificDate", "ASC"], ["dayOfWeek", "ASC"], ["startTime", "ASC"]]
     });
 
     const responseWithConflicts = markConflicts(data);
