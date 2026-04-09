@@ -8,7 +8,7 @@
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "start": "node server.js",
     "schema:sync": "node scripts/ensureProductionSchema.mjs",
-    "bundle": "rm -rf deploy && mkdir deploy && cp -r app migrations scripts server.js package.json package-lock.json workerscheduling-t2-backend.service .env deploy"
+    "bundle": "rm -rf deploy && mkdir deploy && cp -r app migrations scripts config server.js package.json package-lock.json workerscheduling-t2-backend.service .env .sequelizerc deploy"
   },
   "keywords": [
     "node.js",
