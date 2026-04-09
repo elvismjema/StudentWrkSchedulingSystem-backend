@@ -297,9 +297,17 @@ export const reviewSwapRequest = async (req, res) => {
       return fail(res, "Swap request not found.", 404);
     }
 
-    if (swapReq.status !== "manager_pending") {
+    // Manager can decline requests in "pending" (still in pool) or "manager_pending" (volunteer found)
+    // Manager can only approve "manager_pending" requests (a volunteer must exist to assign the shift)
+    const reviewableStatuses = ["pending", "manager_pending"];
+    if (!reviewableStatuses.includes(swapReq.status)) {
       await transaction.rollback();
       return fail(res, `Request is already "${swapReq.status}" and cannot be reviewed again.`, 409);
+    }
+
+    if (action === "approve" && swapReq.status === "pending") {
+      await transaction.rollback();
+      return fail(res, "Cannot approve yet — no student has volunteered to cover this shift.", 400);
     }
 
     // Ensure the shift belongs to one of this manager's departments
