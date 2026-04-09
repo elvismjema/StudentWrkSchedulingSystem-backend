@@ -209,9 +209,18 @@ export const getManagerSwapRequests = async (req, res) => {
     const departmentIds = await getDepartmentScope(req);
     if (!departmentIds.length) return ok(res, []);
 
-    const statusFilter = req.query.status === "all"
-      ? {}
-      : { status: "manager_pending" };
+    // Default: show all requests that need attention (pending pool + awaiting manager review)
+    // ?status=all shows everything including approved/declined history
+    // ?status=manager_pending shows only requests awaiting manager action
+    let statusFilter;
+    if (req.query.status === "all") {
+      statusFilter = {};
+    } else if (req.query.status) {
+      statusFilter = { status: req.query.status };
+    } else {
+      // Default: show pending (waiting for volunteer) + manager_pending (awaiting approval)
+      statusFilter = { status: { [Op.in]: ["pending", "manager_pending"] } };
+    }
 
     const requests = await db.shiftSwapRequest.findAll({
       where: statusFilter,
