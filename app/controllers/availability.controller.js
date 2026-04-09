@@ -266,15 +266,28 @@ exports.findAllForUser = async (req, res) => {
   logger.debug(`Fetching availabilities for user: ${userId}`);
 
   try {
+    // Get student's active department first
+    const { getStudentActiveDepartment } = await import('./user_department.controller.js');
+    const activeDepartment = await getStudentActiveDepartment(userId);
+    
+    let condition = { userId };
+    
+    // If student has active department, filter by it
+    if (activeDepartment) {
+      condition.departmentId = activeDepartment.department_id;
+      logger.debug(`Filtering availabilities by student's active department: ${activeDepartment.department_id}`);
+    }
+
     const data = await Availability.findAll({ 
-      where: { userId: userId },
+      where: condition,
       include: [
         {
-          model: User,
-          as: 'approver',
-          attributes: ['id', 'fName', 'lName', 'email']
-        }
-      ]
+          model: db.user,
+          as: "user",
+          attributes: ["id", "fName", "lName", "email"],
+        },
+      ],
+      order: [["specificDate", "ASC"], ["dayOfWeek", "ASC"], ["startTime", "ASC"]]
     });
 
     const responseWithConflicts = markConflicts(data);

@@ -8,6 +8,40 @@ import {
 const UserDepartment = db.userDepartment;
 const Department = db.department;
 
+// Get student's single active department
+exports.getStudentActiveDepartment = async (userId) => {
+  try {
+    const activeDepartment = await UserDepartment.findOne({
+      where: {
+        user_id: userId,
+        is_active: true,
+      },
+      include: [
+        {
+          model: Department,
+          as: "department",
+          attributes: ["department_id", "department_name", "description"],
+        },
+        {
+          model: db.role,
+          as: "role",
+          attributes: ["role_id", "role_name", "permission_level"],
+        },
+        {
+          model: db.position,
+          as: "position",
+          attributes: ["position_id", "position_name"],
+        },
+      ],
+    });
+
+    return activeDepartment;
+  } catch (error) {
+    console.error('Error getting student active department:', error);
+    return null;
+  }
+};
+
 const exports = {};
 
 const classifyRole = (role) => {
@@ -428,6 +462,22 @@ exports.assignUserRole = async (req, res) => {
       });
     } else {
       // Create new membership
+      // For students, deactivate all existing active departments first
+      if (targetRoleClassification === "student") {
+        await UserDepartment.update(
+          { 
+            is_active: false,
+            deactivated_at: new Date()
+          },
+          {
+            where: {
+              user_id: userId,
+              is_active: true
+            }
+          }
+        );
+      }
+
       const newMembership = await UserDepartment.create({
         user_id: userId,
         department_id: departmentId,
