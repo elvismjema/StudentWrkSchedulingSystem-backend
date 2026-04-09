@@ -439,18 +439,9 @@ export const getOpenShifts = async (req, res) => {
       is_published: true,
       shift_date: dateFilter,
       department_id: { [Op.in]: targetDeptIds },
-      [Op.or]: [
-        // Unassigned open shifts
-        {
-          assigned_user_id: null,
-          [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
-        },
-        // Cover-approved shifts (manager has greenlit the search; not the student's own shift)
-        {
-          trade_status: "approved_cover",
-          assigned_user_id: { [Op.ne]: userId },
-        },
-      ],
+      trade_status: { [Op.notIn]: ["cancelled", "changed"] },
+      // Show unassigned shifts AND cover-approved shifts (manager greenlit; assigned_user_id cleared to null)
+      assigned_user_id: null,
     };
 
     const { count, rows } = await Shift.findAndCountAll({
@@ -499,8 +490,8 @@ export const claimOpenShift = async (req, res) => {
     }
 
     // For truly unassigned shifts: assigned_user_id must be null.
-    // For cover-approved shifts (trade_status = 'approved_cover'): assigned_user_id is the
-    // original student — this is allowed; the volunteer is requesting to pick it up.
+    // For cover-approved shifts (trade_status = 'approved_cover'): assigned_user_id is also
+    // null (cleared when manager approved the cover request). Both paths are allowed.
     const isCoverApproved = shift.trade_status === "approved_cover";
 
     if (shift.assigned_user_id && !isCoverApproved) {
