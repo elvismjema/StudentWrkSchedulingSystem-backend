@@ -165,7 +165,8 @@ export const getDashboard = async (req, res) => {
           assigned_user_id: userId,
           shift_date: today,
           is_published: true,
-          [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+          // Exclude cancelled and approved_cover (cover approved = shift posted as open, no longer Michael's)
+          [Op.or]: [{ trade_status: null }, { trade_status: { [Op.notIn]: ["cancelled", "approved_cover"] } }],
         },
         include: shiftIncludes,
         order: [["start_time", "ASC"]],
@@ -177,7 +178,8 @@ export const getDashboard = async (req, res) => {
           assigned_user_id: userId,
           shift_date: { [Op.between]: [weekStart, weekEnd] },
           is_published: true,
-          [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+          // Exclude cancelled and approved_cover (cover approved = shift posted as open, no longer Michael's)
+          [Op.or]: [{ trade_status: null }, { trade_status: { [Op.notIn]: ["cancelled", "approved_cover"] } }],
         },
         include: shiftIncludes,
         order: [["shift_date", "ASC"], ["start_time", "ASC"]],
@@ -223,9 +225,9 @@ export const getDashboard = async (req, res) => {
                   assigned_user_id: null,
                   [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
                 },
-                // Needing cover (not the student's own shift)
+                // Manager-approved cover shifts (shift is open for pickup, not the student's own shift)
                 {
-                  trade_status: "pending_cover",
+                  trade_status: "approved_cover",
                   assigned_user_id: { [Op.ne]: userId },
                 },
               ],
@@ -331,7 +333,8 @@ export const getMySchedule = async (req, res) => {
         assigned_user_id: userId,
         shift_date: { [Op.between]: [startDate, endDate] },
         is_published: true,
-        [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+        // Exclude cancelled and approved_cover (cover approved = shift posted as open, no longer the student's responsibility)
+        [Op.or]: [{ trade_status: null }, { trade_status: { [Op.notIn]: ["cancelled", "approved_cover"] } }],
       },
       include: [
         ...shiftIncludes,
