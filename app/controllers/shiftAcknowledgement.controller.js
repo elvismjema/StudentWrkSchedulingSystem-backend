@@ -52,6 +52,7 @@ exports.findAll = (req, res) => {
   const shiftId = req.query.shiftId;
   const userId = req.query.userId;
   const acknowledged = req.query.acknowledged;
+  const departmentId = req.query.departmentId;
 
   let condition = {};
 
@@ -65,6 +66,11 @@ exports.findAll = (req, res) => {
     condition.acknowledged = acknowledged === 'true';
   }
 
+  const shiftWhere = {};
+  if (departmentId) {
+    shiftWhere.department_id = Number(departmentId);
+  }
+
   logger.debug(`Fetching shift acknowledgements with condition: ${JSON.stringify(condition)}`);
 
   ShiftAcknowledgement.findAll({
@@ -73,7 +79,9 @@ exports.findAll = (req, res) => {
       {
         model: Shift,
         as: 'shift',
-        attributes: ['shift_id', 'shift_date', 'start_time', 'end_time', 'department_id']
+        attributes: ['shift_id', 'shift_date', 'start_time', 'end_time', 'department_id'],
+        where: Object.keys(shiftWhere).length ? shiftWhere : undefined,
+        required: Object.keys(shiftWhere).length > 0,
       },
       {
         model: User,
@@ -99,13 +107,29 @@ exports.findAll = (req, res) => {
 exports.findAllUnacknowledged = (req, res) => {
   logger.debug('Fetching all unacknowledged shift acknowledgements');
 
+  const departmentId = req.query.departmentId;
+  const acknowledgedQuery = req.query.acknowledged;
+  const where = {};
+  if (acknowledgedQuery === undefined) {
+    where.acknowledged = false;
+  } else {
+    where.acknowledged = acknowledgedQuery === "true";
+  }
+
+  const shiftWhere = {};
+  if (departmentId) {
+    shiftWhere.department_id = Number(departmentId);
+  }
+
   ShiftAcknowledgement.findAll({
-    where: { acknowledged: false },
+    where,
     include: [
       {
         model: Shift,
         as: 'shift',
-        attributes: ['shift_id', 'shift_date', 'start_time', 'end_time', 'department_id']
+        attributes: ['shift_id', 'shift_date', 'start_time', 'end_time', 'department_id'],
+        where: Object.keys(shiftWhere).length ? shiftWhere : undefined,
+        required: Object.keys(shiftWhere).length > 0,
       },
       {
         model: User,

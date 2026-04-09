@@ -8,6 +8,7 @@ const Availability = db.availability;
 const ShiftAcknowledgement = db.shiftAcknowledgement;
 const ShiftAudit = db.shiftAudit;
 const User = db.user;
+const TimeOffRequest = db.timeOffRequest;
 const Qualification = db.qualification;
 const UserQualification = db.userQualification;
 const PositionQualification = db.positionQualification;
@@ -241,6 +242,29 @@ const validateAvailabilityCoverage = async (userId, shiftDate, startTime, endTim
   return { valid: true };
 };
 
+const validateApprovedTimeOffCoverage = async (userId, shiftDate) => {
+  if (!shiftDate) return { valid: true };
+
+  const blockingRequest = await TimeOffRequest.findOne({
+    where: {
+      user_id: userId,
+      status: "approved",
+      start_date: { [Op.lte]: shiftDate },
+      end_date: { [Op.gte]: shiftDate },
+    },
+  });
+
+  if (blockingRequest) {
+    return {
+      valid: false,
+      message: "Assigned user has an approved time-off request for this date.",
+      conflictType: "time_off_conflict",
+    };
+  }
+
+  return { valid: true };
+};
+
 const validateAssignmentEligibility = async (
   departmentId,
   assignedUserId,
@@ -260,6 +284,14 @@ const validateAssignmentEligibility = async (
   );
   if (!departmentValidation.valid) {
     return departmentValidation;
+  }
+
+  const timeOffValidation = await validateApprovedTimeOffCoverage(
+    assignedUserId,
+    shiftDate,
+  );
+  if (!timeOffValidation.valid) {
+    return timeOffValidation;
   }
 
   return validateAvailabilityCoverage(

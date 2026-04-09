@@ -427,7 +427,7 @@ export const claimOpenShift = async (req, res) => {
     const userId = req.auth.userId;
     const shiftId = Number(req.params.id);
 
-    // Lock the shift row to prevent double-claim
+    // Lock shift while validating open-claim eligibility
     const shift = await Shift.findByPk(shiftId, {
       include: [{ model: Department, as: "department" }],
       transaction,
@@ -481,27 +481,48 @@ export const claimOpenShift = async (req, res) => {
       );
     }
 
-    // Assign the shift
-    shift.assigned_user_id = userId;
-    shift.updated_at = new Date();
-    await shift.save({ transaction });
+    // Prevent duplicate pending claims from the same user for the same shift.
+    const existingClaim = await ShiftSwapRequest.findOne({
+      where: {
+        requester_shift_id: shiftId,
+        requester_user_id: userId,
+        type: "find_cover",
+        status: { [Op.in]: ["pending", "manager_pending"] },
+      },
+      transaction,
+    });
+    if (existingClaim) {
+      await transaction.rollback();
+      return fail(res, "You already have a pending claim for this shift.", 409);
+    }
 
-    // Create acknowledgement record
-    await ShiftAcknowledgement.create(
-      { shiftId, userId, acknowledged: false },
+    // Reuse pending-approval workflow via ShiftSwapRequest.
+    const claimRequest = await ShiftSwapRequest.create(
+      {
+        requester_shift_id: shiftId,
+        requester_user_id: userId,
+        respondent_user_id: userId,
+        type: "find_cover",
+        status: "manager_pending",
+        requester_notes: req.body?.notes || "Open shift claim request",
+        created_at: new Date(),
+        updated_at: new Date(),
+      },
       { transaction }
     );
 
     await transaction.commit();
 
     // Notify (non-blocking)
-    sendNotification(userId, "Shift Claimed", `You picked up a shift on ${shift.shift_date}.`, {
+    sendNotification(userId, "Shift Claim Submitted", `Your claim for the shift on ${shift.shift_date} is pending manager approval.`, {
       type: "shift_assignment",
-      link: `/shifts/${shiftId}`,
+      link: `/manager/approvals`,
     }).catch((err) => logger.error(`Notification error: ${err.message}`));
+    notifyManagersOfSwapRequest(claimRequest, shift, "find_cover").catch((err) =>
+      logger.error(`Manager notification error: ${err.message}`)
+    );
 
-    const claimed = await Shift.findByPk(shiftId, { include: shiftIncludes });
-    return ok(res, claimed, "Shift claimed successfully.", 200);
+    return ok(res, claimRequest, "Shift claim submitted for manager approval.", 200);
   } catch (error) {
     await transaction.rollback();
     logger.error(`[StudentController] claimOpenShift error: ${error.message}`);
