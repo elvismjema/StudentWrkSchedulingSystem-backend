@@ -22,6 +22,10 @@ import db from "../models/index.js";
 import logger from "../config/logger.js";
 import { sendNotification } from "../services/notificationService.js";
 import { resolveHighestRoleForUser } from "../authorization/roleAccess.js";
+import {
+  fetchStudentSchedule,
+  normalizeScheduleToAvailabilityBlocks,
+} from "../services/studentClassSchedule.service.js";
 
 const { Op } = db.Sequelize;
 
@@ -1234,6 +1238,88 @@ export const getMyAvailability = async (req, res) => {
   } catch (error) {
     logger.error(`[StudentController] getMyAvailability error: ${error.message}`);
     return fail(res, "Error retrieving availability.");
+  }
+};
+
+/**
+ * POST /api/student/availability/sync-class-schedule
+ *
+ * Sync student's class meetings into recurring unavailable availability blocks.
+ * Existing class-schedule generated blocks are replaced atomically.
+ * Manual availability blocks are preserved.
+ */
+export const syncClassScheduleAvailability = async (req, res) => {
+  const transaction = await db.sequelize.transaction();
+  try {
+    const userId = req.auth.userId;
+    const fallbackUser = await User.findByPk(userId, {
+      attributes: ["id", "email"],
+      transaction,
+    });
+    const studentEmail = req.auth.email || fallbackUser?.email;
+
+    if (!studentEmail) {
+      await transaction.rollback();
+      return fail(res, "Student email not found. Cannot sync class schedule.", 400);
+    }
+
+    const { termCode } = req.body || {};
+    const { payload, termCode: resolvedTermCode } = await fetchStudentSchedule({
+      email: studentEmail,
+      termCode,
+    });
+
+    const desiredBlocks = normalizeScheduleToAvailabilityBlocks(payload).map((block) => ({
+      ...block,
+      userId,
+    }));
+
+    const existingClassRecords = await Availability.findAll({
+      where: {
+        userId,
+        specificDate: null,
+        isRecurring: true,
+        recurrencePattern: "class_schedule",
+      },
+      transaction,
+    });
+
+    const deleted = existingClassRecords.length;
+    if (deleted > 0) {
+      await Availability.destroy({
+        where: {
+          userId,
+          specificDate: null,
+          isRecurring: true,
+          recurrencePattern: "class_schedule",
+        },
+        transaction,
+      });
+    }
+
+    let created = 0;
+    if (desiredBlocks.length > 0) {
+      await Availability.bulkCreate(desiredBlocks, { transaction });
+      created = desiredBlocks.length;
+    }
+
+    await transaction.commit();
+
+    return ok(
+      res,
+      {
+        synced: true,
+        termCode: resolvedTermCode,
+        created,
+        deleted,
+        unchanged: 0,
+      },
+      "Class schedule synced into availability."
+    );
+  } catch (error) {
+    await transaction.rollback();
+    logger.error(`[StudentController] syncClassScheduleAvailability error: ${error.message}`);
+    return fail(res, "Failed to sync class schedule into availability.", 502);
   }
 };
 
