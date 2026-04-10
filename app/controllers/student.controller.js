@@ -1272,6 +1272,7 @@ export const syncClassScheduleAvailability = async (req, res) => {
     const desiredBlocks = normalizeScheduleToAvailabilityBlocks(payload).map((block) => ({
       ...block,
       userId,
+      specificDate: null,
     }));
 
     const existingClassRecords = await Availability.findAll({
@@ -1279,28 +1280,70 @@ export const syncClassScheduleAvailability = async (req, res) => {
         userId,
         specificDate: null,
         isRecurring: true,
-        recurrencePattern: "class_schedule",
+        [Op.or]: [
+          { sourceType: "class_schedule" },
+          { recurrencePattern: "class_schedule" },
+        ],
       },
       transaction,
     });
 
-    const deleted = existingClassRecords.length;
-    if (deleted > 0) {
+    const makeSignature = (entry) => {
+      const dayOfWeek = Number(entry.dayOfWeek);
+      const startTime = String(entry.startTime || "").slice(0, 8);
+      const endTime = String(entry.endTime || "").slice(0, 8);
+      const availabilityType = String(entry.availabilityType || "available");
+      const sourceType = String(entry.sourceType || "class_schedule");
+      const sourceRef = String(entry.sourceRef || "");
+      return [dayOfWeek, startTime, endTime, availabilityType, sourceType, sourceRef].join("|");
+    };
+
+    const existingBySignature = new Map();
+    const duplicateExistingIds = [];
+
+    for (const rec of existingClassRecords) {
+      const signature = makeSignature(rec);
+      if (existingBySignature.has(signature)) {
+        duplicateExistingIds.push(rec.id);
+        continue;
+      }
+      existingBySignature.set(signature, rec);
+    }
+
+    const desiredBySignature = new Map();
+    for (const block of desiredBlocks) {
+      const signature = makeSignature(block);
+      if (!desiredBySignature.has(signature)) {
+        desiredBySignature.set(signature, block);
+      }
+    }
+
+    const toCreate = [];
+    let unchanged = 0;
+    for (const [signature, block] of desiredBySignature.entries()) {
+      if (existingBySignature.has(signature)) {
+        unchanged += 1;
+      } else {
+        toCreate.push(block);
+      }
+    }
+
+    const toDeleteIds = [
+      ...duplicateExistingIds,
+      ...existingClassRecords
+        .filter((rec) => !desiredBySignature.has(makeSignature(rec)))
+        .map((rec) => rec.id),
+    ];
+
+    if (toDeleteIds.length > 0) {
       await Availability.destroy({
-        where: {
-          userId,
-          specificDate: null,
-          isRecurring: true,
-          recurrencePattern: "class_schedule",
-        },
+        where: { id: toDeleteIds },
         transaction,
       });
     }
 
-    let created = 0;
-    if (desiredBlocks.length > 0) {
-      await Availability.bulkCreate(desiredBlocks, { transaction });
-      created = desiredBlocks.length;
+    if (toCreate.length > 0) {
+      await Availability.bulkCreate(toCreate, { transaction });
     }
 
     await transaction.commit();
@@ -1310,9 +1353,9 @@ export const syncClassScheduleAvailability = async (req, res) => {
       {
         synced: true,
         termCode: resolvedTermCode,
-        created,
-        deleted,
-        unchanged: 0,
+        created: toCreate.length,
+        deleted: toDeleteIds.length,
+        unchanged,
       },
       "Class schedule synced into availability."
     );

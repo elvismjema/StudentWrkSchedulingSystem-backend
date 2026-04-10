@@ -94,6 +94,9 @@ export const normalizeScheduleToAvailabilityBlocks = (schedulePayload) => {
           availabilityType: "unavailable",
           isRecurring: true,
           recurrencePattern: "class_schedule",
+          sourceType: "class_schedule",
+          sourceRef,
+          isSystemManaged: true,
           requestStatus: "approved",
           requestNotes: `Auto-synced from class schedule (${sourceRef})`,
         });
