@@ -28,6 +28,7 @@ import {
   // 6. Availability
   getMyAvailability,
   updateMyAvailability,
+  syncClassScheduleAvailability,
   // 7. Clock In/Out & Breaks
   studentClockIn,
   studentClockOut,
@@ -77,6 +78,7 @@ router.delete("/time-off/:id", [authenticate], cancelTimeOff);
 // ── 6. Availability ──────────────────────────────────────────────────────────
 router.get("/availability", [authenticate], getMyAvailability);
 router.put("/availability", [authenticate], updateMyAvailability);
+router.post("/availability/sync-class-schedule", [authenticate], syncClassScheduleAvailability);
 
 // ── 7. Clock In/Out & Breaks ─────────────────────────────────────────────────
 router.post("/clock-in", [authenticate], studentClockIn);
