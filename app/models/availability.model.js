@@ -60,6 +60,21 @@ const Availability = SequelizeInstance.define("availability", {
     type: Sequelize.DATEONLY,
     allowNull: true
   },
+  sourceType: {
+    type: Sequelize.STRING,
+    allowNull: true,
+    comment: 'Source marker for system-generated records (e.g., class_schedule)'
+  },
+  sourceRef: {
+    type: Sequelize.STRING,
+    allowNull: true,
+    comment: 'Stable external reference for idempotent sync operations'
+  },
+  isSystemManaged: {
+    type: Sequelize.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
+  },
   requestStatus: {
     type: Sequelize.ENUM('pending', 'approved', 'rejected', 'cancelled'),
     allowNull: false,

@@ -36,6 +36,35 @@ const validateTimeRange = (startTime, endTime) => {
   return { valid: true };
 };
 
+const deriveDayOfWeek = (specificDate) => {
+  if (!specificDate) return null;
+  const date = new Date(`${specificDate}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.getDay();
+};
+
+const hasClassScheduleConflict = async ({ userId, dayOfWeek, startTime, endTime }) => {
+  if (dayOfWeek === null || dayOfWeek === undefined) return false;
+  const conflict = await Availability.findOne({
+    where: {
+      userId,
+      dayOfWeek,
+      specificDate: null,
+      isRecurring: true,
+      [Op.or]: [
+        { sourceType: "class_schedule" },
+        { recurrencePattern: "class_schedule" },
+        { isSystemManaged: true },
+      ],
+      [Op.and]: [
+        { startTime: { [Op.lt]: normalizeTime(endTime) } },
+        { endTime: { [Op.gt]: normalizeTime(startTime) } },
+      ],
+    },
+  });
+  return Boolean(conflict);
+};
+
 const hasAvailabilityConflict = async ({
   userId,
   startTime,
@@ -193,6 +222,32 @@ exports.create = async (req, res) => {
           "Availability overlaps with an existing record. Please choose a non-conflicting time range.",
       });
       return;
+    }
+
+    const resolvedDayOfWeek =
+      availability.dayOfWeek ?? deriveDayOfWeek(availability.specificDate);
+
+    const shouldGuardClassTime =
+      (availability.availabilityType === "available" || availability.availabilityType === "preferred")
+      && !(
+        availability.sourceType === "class_schedule"
+        || availability.recurrencePattern === "class_schedule"
+        || availability.isSystemManaged
+      );
+
+    if (shouldGuardClassTime) {
+      const classConflict = await hasClassScheduleConflict({
+        userId: availability.userId,
+        dayOfWeek: resolvedDayOfWeek,
+        startTime: availability.startTime,
+        endTime: availability.endTime,
+      });
+
+      if (classConflict) {
+        return res.status(409).send({
+          message: "Availability overlaps with locked class schedule time.",
+        });
+      }
     }
 
     const data = await Availability.create(availability);
