@@ -32,8 +32,10 @@
     "morgan": "^1.10.0",
     "multer": "^2.1.0",
     "mysql2": "^2.3.3",
+    "nodemailer": "^6.10.1",
     "sequelize": "^6.19.0",
     "supertest": "^6.3.3",
+    "twilio": "^5.10.4",
     "winston": "^3.11.0",
     "winston-daily-rotate-file": "^4.7.1"
   },
