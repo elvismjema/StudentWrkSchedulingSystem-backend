@@ -1888,7 +1888,7 @@ export const getTimesheet = async (req, res) => {
 
     const entries = clockRecords.map((cr) => {
       const breaks = breaksByClockId[cr.clock_id] || [];
-      const breakMins = breaks.reduce((sum, b) => {
+      const breakMinsRaw = breaks.reduce((sum, b) => {
         if (b.break_start && b.break_end) {
           return sum + Math.round(
             (new Date(b.break_end).getTime() - new Date(b.break_start).getTime()) / 60000
@@ -1897,9 +1897,13 @@ export const getTimesheet = async (req, res) => {
         return sum;
       }, 0);
 
-      const workedMins = cr.clock_out
+      const workedMinsRaw = cr.clock_out
         ? Math.round((new Date(cr.clock_out).getTime() - new Date(cr.clock_in).getTime()) / 60000)
         : Math.round((Date.now() - new Date(cr.clock_in).getTime()) / 60000);
+
+      const workedMins = Math.max(0, workedMinsRaw);
+      const breakMins = Math.max(0, Math.min(breakMinsRaw, workedMins));
+      const netMins = Math.max(0, workedMins - breakMins);
 
       const scheduledMins = cr.shift
         ? Math.max(0, toMinutes(cr.shift.end_time) - toMinutes(cr.shift.start_time))
@@ -1918,7 +1922,16 @@ export const getTimesheet = async (req, res) => {
         scheduledEnd: cr.shift?.end_time || null,
         workedMinutes: workedMins,
         breakMinutes: breakMins,
-        netMinutes: workedMins - breakMins,
+        netMinutes: netMins,
+        // Backward-compatible aliases used by some clients/views
+        clock_in: cr.clock_in,
+        clock_out: cr.clock_out,
+        scheduled_start: cr.shift?.start_time || null,
+        scheduled_end: cr.shift?.end_time || null,
+        break_minutes: breakMins,
+        worked_minutes: workedMins,
+        net_minutes: netMins,
+        total_hours: +(netMins / 60).toFixed(2),
         department: cr.shift?.department || null,
         position: cr.shift?.position || null,
         breaks,
@@ -1930,9 +1943,9 @@ export const getTimesheet = async (req, res) => {
       summary: {
         totalWorkedMinutes,
         totalBreakMinutes,
-        totalNetMinutes: totalWorkedMinutes - totalBreakMinutes,
+        totalNetMinutes: Math.max(0, totalWorkedMinutes - totalBreakMinutes),
         totalWorkedHours: +(totalWorkedMinutes / 60).toFixed(1),
-        totalNetHours: +((totalWorkedMinutes - totalBreakMinutes) / 60).toFixed(1),
+        totalNetHours: +(Math.max(0, totalWorkedMinutes - totalBreakMinutes) / 60).toFixed(1),
         totalScheduledMinutes,
         totalScheduledHours: +(totalScheduledMinutes / 60).toFixed(1),
       },
