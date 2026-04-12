@@ -34,19 +34,6 @@ const User = SequelizeInstance.define("user", {
     allowNull: false,
     defaultValue: "student",
   },
-  classScheduleLastSyncedAt: {
-    type: Sequelize.DATE,
-    allowNull: true,
-  },
-  classScheduleSyncStatus: {
-    type: Sequelize.ENUM("never_synced", "success", "failed"),
-    allowNull: false,
-    defaultValue: "never_synced",
-  },
-  classScheduleSyncError: {
-    type: Sequelize.TEXT,
-    allowNull: true,
-  },
   // refresh_token: {
   //   type: Sequelize.STRING(512),
   //   allowNull: true

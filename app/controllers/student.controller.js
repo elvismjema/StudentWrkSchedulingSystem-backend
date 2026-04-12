@@ -1302,23 +1302,29 @@ export const getMyAvailability = async (req, res) => {
 export const getClassScheduleSyncStatus = async (req, res) => {
   try {
     const userId = req.auth.userId;
-    const user = await User.findByPk(userId, {
-      attributes: [
-        "id",
-        "classScheduleLastSyncedAt",
-        "classScheduleSyncStatus",
-        "classScheduleSyncError",
-      ],
-    });
+    const user = await User.findByPk(userId, { attributes: ["id"] });
 
     if (!user) {
       return fail(res, "User not found.", 404);
     }
 
+    const whereClassBlocks = {
+      userId,
+      specificDate: null,
+      isRecurring: true,
+      [Op.or]: [
+        { sourceType: "class_schedule" },
+        { recurrencePattern: "class_schedule" },
+      ],
+    };
+
+    const classBlockCount = await Availability.count({ where: whereClassBlocks });
+    const lastSyncedAt = await Availability.max("updatedAt", { where: whereClassBlocks });
+
     return ok(res, {
-      lastSyncedAt: user.classScheduleLastSyncedAt || null,
-      status: user.classScheduleSyncStatus || "never_synced",
-      error: user.classScheduleSyncError || null,
+      lastSyncedAt: lastSyncedAt || null,
+      status: classBlockCount > 0 ? "success" : "never_synced",
+      error: null,
     });
   } catch (error) {
     logger.error(`[StudentController] getClassScheduleSyncStatus error: ${error.message}`);
@@ -1431,15 +1437,6 @@ export const syncClassScheduleAvailability = async (req, res) => {
       await Availability.bulkCreate(toCreate, { transaction });
     }
 
-    await User.update(
-      {
-        classScheduleLastSyncedAt: new Date(),
-        classScheduleSyncStatus: "success",
-        classScheduleSyncError: null,
-      },
-      { where: { id: userId }, transaction }
-    );
-
     await transaction.commit();
 
     return ok(
@@ -1455,13 +1452,6 @@ export const syncClassScheduleAvailability = async (req, res) => {
     );
   } catch (error) {
     await transaction.rollback();
-    await User.update(
-      {
-        classScheduleSyncStatus: "failed",
-        classScheduleSyncError: String(error?.message || "Unknown sync failure").slice(0, 1000),
-      },
-      { where: { id: req.auth?.userId } }
-    ).catch(() => {});
     logger.error(`[StudentController] syncClassScheduleAvailability error: ${error.message}`);
     return fail(res, "Failed to sync class schedule into availability.", 502);
   }
