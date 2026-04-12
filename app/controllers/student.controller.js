@@ -1217,6 +1217,61 @@ export const cancelTimeOff = async (req, res) => {
 // 6. AVAILABILITY
 // ═════════════════════════════════════════════════════════════════════════════
 
+const toTimeString = (value) => String(value || "").slice(0, 8);
+
+const overlapsTime = (startA, endA, startB, endB) =>
+  toMinutes(startA) < toMinutes(endB) && toMinutes(endA) > toMinutes(startB);
+
+const isClassScheduleAvailability = (record) =>
+  record?.sourceType === "class_schedule"
+  || record?.recurrencePattern === "class_schedule"
+  || Boolean(record?.isSystemManaged);
+
+const ensureNoClassTimeOverrides = async ({ userId, entries, transaction }) => {
+  const classBlocks = await Availability.findAll({
+    where: {
+      userId,
+      specificDate: null,
+      isRecurring: true,
+      [Op.or]: [
+        { sourceType: "class_schedule" },
+        { recurrencePattern: "class_schedule" },
+        { isSystemManaged: true },
+      ],
+    },
+    transaction,
+  });
+
+  const classByDay = new Map();
+  for (const rec of classBlocks) {
+    const day = Number(rec.dayOfWeek);
+    if (!classByDay.has(day)) classByDay.set(day, []);
+    classByDay.get(day).push({
+      startTime: toTimeString(rec.startTime),
+      endTime: toTimeString(rec.endTime),
+    });
+  }
+
+  for (const entry of entries) {
+    const type = String(entry.availabilityType || "available").toLowerCase();
+    if (!["available", "preferred"].includes(type)) continue;
+    const day = Number(entry.dayOfWeek);
+    const classWindows = classByDay.get(day) || [];
+    for (const classWindow of classWindows) {
+      if (overlapsTime(entry.startTime, entry.endTime, classWindow.startTime, classWindow.endTime)) {
+        return {
+          conflict: true,
+          dayOfWeek: day,
+          startTime: entry.startTime,
+          endTime: entry.endTime,
+        };
+      }
+    }
+  }
+
+  return { conflict: false };
+};
+
 /**
  * GET /api/student/availability
  *
@@ -1238,6 +1293,36 @@ export const getMyAvailability = async (req, res) => {
   } catch (error) {
     logger.error(`[StudentController] getMyAvailability error: ${error.message}`);
     return fail(res, "Error retrieving availability.");
+  }
+};
+
+/**
+ * GET /api/student/availability/class-sync-status
+ */
+export const getClassScheduleSyncStatus = async (req, res) => {
+  try {
+    const userId = req.auth.userId;
+    const user = await User.findByPk(userId, {
+      attributes: [
+        "id",
+        "classScheduleLastSyncedAt",
+        "classScheduleSyncStatus",
+        "classScheduleSyncError",
+      ],
+    });
+
+    if (!user) {
+      return fail(res, "User not found.", 404);
+    }
+
+    return ok(res, {
+      lastSyncedAt: user.classScheduleLastSyncedAt || null,
+      status: user.classScheduleSyncStatus || "never_synced",
+      error: user.classScheduleSyncError || null,
+    });
+  } catch (error) {
+    logger.error(`[StudentController] getClassScheduleSyncStatus error: ${error.message}`);
+    return fail(res, "Failed to retrieve class sync status.", 500);
   }
 };
 
@@ -1346,6 +1431,15 @@ export const syncClassScheduleAvailability = async (req, res) => {
       await Availability.bulkCreate(toCreate, { transaction });
     }
 
+    await User.update(
+      {
+        classScheduleLastSyncedAt: new Date(),
+        classScheduleSyncStatus: "success",
+        classScheduleSyncError: null,
+      },
+      { where: { id: userId }, transaction }
+    );
+
     await transaction.commit();
 
     return ok(
@@ -1361,6 +1455,13 @@ export const syncClassScheduleAvailability = async (req, res) => {
     );
   } catch (error) {
     await transaction.rollback();
+    await User.update(
+      {
+        classScheduleSyncStatus: "failed",
+        classScheduleSyncError: String(error?.message || "Unknown sync failure").slice(0, 1000),
+      },
+      { where: { id: req.auth?.userId } }
+    ).catch(() => {});
     logger.error(`[StudentController] syncClassScheduleAvailability error: ${error.message}`);
     return fail(res, "Failed to sync class schedule into availability.", 502);
   }
@@ -1404,6 +1505,20 @@ export const updateMyAvailability = async (req, res) => {
         await transaction.rollback();
         return fail(res, `availabilityType must be one of: ${validTypes.join(", ")}`, 400);
       }
+    }
+
+    const classOverrideCheck = await ensureNoClassTimeOverrides({
+      userId,
+      entries,
+      transaction,
+    });
+    if (classOverrideCheck.conflict) {
+      await transaction.rollback();
+      return fail(
+        res,
+        `Availability overlaps locked class time on day ${classOverrideCheck.dayOfWeek} (${classOverrideCheck.startTime}-${classOverrideCheck.endTime}).`,
+        409
+      );
     }
 
     // Remove existing recurring availability (keep specific-date overrides)
