@@ -70,6 +70,11 @@ const Availability = SequelizeInstance.define("availability", {
     allowNull: true,
     comment: 'Stable external reference for idempotent sync operations'
   },
+  syncBatchId: {
+    type: Sequelize.STRING,
+    allowNull: true,
+    comment: 'Sync batch identifier for tracing class schedule imports'
+  },
   isSystemManaged: {
     type: Sequelize.BOOLEAN,
     allowNull: false,

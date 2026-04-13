@@ -1315,15 +1315,52 @@ export const getClassScheduleSyncStatus = async (req, res) => {
       [Op.or]: [
         { sourceType: "class_schedule" },
         { recurrencePattern: "class_schedule" },
+        { isSystemManaged: true },
       ],
     };
 
     const classBlockCount = await Availability.count({ where: whereClassBlocks });
-    const lastSyncedAt = await Availability.max("updatedAt", { where: whereClassBlocks });
+
+    if (classBlockCount <= 0) {
+      return ok(res, {
+        lastSyncedAt: null,
+        status: "never_synced",
+        termCode: null,
+        totalClassBlocks: 0,
+        updated: 0,
+        error: null,
+      });
+    }
+
+    const latestClassRecord = await Availability.findOne({
+      where: whereClassBlocks,
+      attributes: ["syncBatchId", "updatedAt"],
+      order: [["updatedAt", "DESC"]],
+    });
+
+    const latestSyncBatchId = latestClassRecord?.syncBatchId || null;
+    const lastSyncedAt = latestClassRecord?.updatedAt || null;
+
+    const termFromBatchMatch = latestSyncBatchId
+      ? String(latestSyncBatchId).match(/^class-sync-\d+-(.+)-\d+$/)
+      : null;
+    const termCode = termFromBatchMatch?.[1] || null;
+
+    const updated = latestSyncBatchId
+      ? await Availability.count({
+        where: {
+          ...whereClassBlocks,
+          syncBatchId: latestSyncBatchId,
+        },
+      })
+      : 0;
 
     return ok(res, {
-      lastSyncedAt: lastSyncedAt || null,
-      status: classBlockCount > 0 ? "success" : "never_synced",
+      lastSyncedAt,
+      status: "success",
+      termCode,
+      totalClassBlocks: classBlockCount,
+      updated,
       error: null,
     });
   } catch (error) {
@@ -1360,10 +1397,17 @@ export const syncClassScheduleAvailability = async (req, res) => {
       termCode,
     });
 
+    const sanitizedTermCode = String(resolvedTermCode || "unknown")
+      .replace(/[^a-zA-Z0-9_-]/g, "")
+      .slice(0, 32) || "unknown";
+    const syncBatchId = `class-sync-${userId}-${sanitizedTermCode}-${Date.now()}`;
+    const syncTimestamp = new Date();
+
     const desiredBlocks = normalizeScheduleToAvailabilityBlocks(payload).map((block) => ({
       ...block,
       userId,
       specificDate: null,
+      syncBatchId,
     }));
 
     const existingClassRecords = await Availability.findAll({
@@ -1374,6 +1418,7 @@ export const syncClassScheduleAvailability = async (req, res) => {
         [Op.or]: [
           { sourceType: "class_schedule" },
           { recurrencePattern: "class_schedule" },
+          { isSystemManaged: true },
         ],
       },
       transaction,
@@ -1410,10 +1455,13 @@ export const syncClassScheduleAvailability = async (req, res) => {
     }
 
     const toCreate = [];
+    const matchedExistingIds = [];
     let unchanged = 0;
     for (const [signature, block] of desiredBySignature.entries()) {
-      if (existingBySignature.has(signature)) {
+      const matched = existingBySignature.get(signature);
+      if (matched) {
         unchanged += 1;
+        matchedExistingIds.push(matched.id);
       } else {
         toCreate.push(block);
       }
@@ -1437,6 +1485,24 @@ export const syncClassScheduleAvailability = async (req, res) => {
       await Availability.bulkCreate(toCreate, { transaction });
     }
 
+    let updated = 0;
+    if (matchedExistingIds.length > 0) {
+      const [updatedCount] = await Availability.update(
+        {
+          sourceType: "class_schedule",
+          recurrencePattern: "class_schedule",
+          isSystemManaged: true,
+          syncBatchId,
+          updatedAt: syncTimestamp,
+        },
+        {
+          where: { id: matchedExistingIds },
+          transaction,
+        }
+      );
+      updated = Number(updatedCount) || 0;
+    }
+
     await transaction.commit();
 
     return ok(
@@ -1444,7 +1510,10 @@ export const syncClassScheduleAvailability = async (req, res) => {
       {
         synced: true,
         termCode: resolvedTermCode,
+        syncBatchId,
+        lastSyncedAt: syncTimestamp.toISOString(),
         created: toCreate.length,
+        updated,
         deleted: toDeleteIds.length,
         unchanged,
       },

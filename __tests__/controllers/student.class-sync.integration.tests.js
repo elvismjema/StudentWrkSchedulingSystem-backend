@@ -7,10 +7,11 @@ const mockTransaction = {
 
 const mockAvailability = {
   findAll: jest.fn(),
+  findOne: jest.fn(),
   destroy: jest.fn(),
   bulkCreate: jest.fn(),
+  update: jest.fn(),
   count: jest.fn(),
-  max: jest.fn(),
 };
 
 const mockUser = {
@@ -124,6 +125,7 @@ describe('student class sync + overlap prevention', () => {
 
     mockAvailability.bulkCreate.mockResolvedValue([]);
     mockAvailability.destroy.mockResolvedValue(0);
+    mockAvailability.update.mockResolvedValue([2]);
 
     const req = { auth: { userId: 11, email: 'student@school.edu' }, body: { termCode: '2026SP' } };
 
@@ -132,7 +134,7 @@ describe('student class sync + overlap prevention', () => {
 
     expect(firstRes.status).toHaveBeenCalledWith(200);
     expect(getPayload(firstRes).data).toEqual(
-      expect.objectContaining({ created: 2, deleted: 0, unchanged: 0, termCode: '2026SP' })
+      expect.objectContaining({ created: 2, updated: 0, deleted: 0, unchanged: 0, termCode: '2026SP' })
     );
 
     const secondRes = mockRes();
@@ -140,10 +142,11 @@ describe('student class sync + overlap prevention', () => {
 
     expect(secondRes.status).toHaveBeenCalledWith(200);
     expect(getPayload(secondRes).data).toEqual(
-      expect.objectContaining({ created: 0, deleted: 0, unchanged: 2, termCode: '2026SP' })
+      expect.objectContaining({ created: 0, updated: 2, deleted: 0, unchanged: 2, termCode: '2026SP' })
     );
 
     expect(mockAvailability.bulkCreate).toHaveBeenCalledTimes(1);
+    expect(mockAvailability.update).toHaveBeenCalledTimes(1);
     expect(mockTransaction.commit).toHaveBeenCalledTimes(2);
   });
 
@@ -189,8 +192,14 @@ describe('student class sync + overlap prevention', () => {
 
   it('A3: returns derived class sync status from availability records', async () => {
     mockUser.findByPk.mockResolvedValue({ id: 44 });
-    mockAvailability.count.mockResolvedValue(2);
-    mockAvailability.max.mockResolvedValue('2026-04-12T11:00:00.000Z');
+    mockAvailability.count
+      .mockResolvedValueOnce(2)
+      .mockResolvedValueOnce(2)
+      .mockResolvedValueOnce(0);
+    mockAvailability.findOne.mockResolvedValue({
+      syncBatchId: 'class-sync-44-2026SP-1712948400000',
+      updatedAt: '2026-04-12T11:00:00.000Z',
+    });
 
     const req = { auth: { userId: 44 } };
     const res = mockRes();
@@ -201,11 +210,12 @@ describe('student class sync + overlap prevention', () => {
     expect(getPayload(res).data).toEqual({
       status: 'success',
       lastSyncedAt: '2026-04-12T11:00:00.000Z',
+      termCode: '2026SP',
+      totalClassBlocks: 2,
+      updated: 2,
       error: null,
     });
 
-    mockAvailability.count.mockResolvedValueOnce(0);
-    mockAvailability.max.mockResolvedValueOnce(null);
     const emptyRes = mockRes();
 
     await getClassScheduleSyncStatus(req, emptyRes);
@@ -214,6 +224,9 @@ describe('student class sync + overlap prevention', () => {
     expect(getPayload(emptyRes).data).toEqual({
       status: 'never_synced',
       lastSyncedAt: null,
+      termCode: null,
+      totalClassBlocks: 0,
+      updated: 0,
       error: null,
     });
   });
