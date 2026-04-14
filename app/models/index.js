@@ -35,6 +35,7 @@ import ShiftSwapRequest from "./shift_swap_request.model.js";
 import TimeOffRequest from "./time_off_request.model.js";
 import BreakRecord from "./break_record.model.js";
 import TimecardApproval from "./timecard_approval.model.js";
+import SystemSetting from "./system_setting.model.js";
 
 
 const db = {};
@@ -73,6 +74,7 @@ db.shiftSwapRequest = ShiftSwapRequest;
 db.timeOffRequest = TimeOffRequest;
 db.breakRecord = BreakRecord;
 db.timecardApproval = TimecardApproval;
+db.systemSetting = SystemSetting;
 
 
 // foreign key for session

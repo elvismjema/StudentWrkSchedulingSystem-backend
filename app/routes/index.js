@@ -29,6 +29,9 @@ import PositionQualificationRoutes from "./position_qualification.routes.js";
 import ShiftTagRoutes from "./shift_tag.routes.js";
 import TagRoutes from "./tag.routes.js";
 
+import ReportRoutes from "./report.routes.js";
+import SystemSettingRoutes from "./system_setting.routes.js";
+
 // ── NEW: Student Dashboard Routes ────────────────────────────────────────────
 import StudentRoutes from "./student.routes.js";
 
@@ -64,6 +67,9 @@ router.use("/shift-trades", ShiftTradeRoutes);
 router.use("/position-qualifications", PositionQualificationRoutes);
 router.use("/shift-tags", ShiftTagRoutes);
 router.use("/tags", TagRoutes);
+
+router.use("/reports", ReportRoutes);
+router.use("/system-settings", SystemSettingRoutes);
 
 // ── NEW: Student Dashboard ───────────────────────────────────────────────────
 router.use("/student", StudentRoutes);
