@@ -22,6 +22,10 @@ import db from "../models/index.js";
 import logger from "../config/logger.js";
 import { sendNotification } from "../services/notificationService.js";
 import { resolveHighestRoleForUser } from "../authorization/roleAccess.js";
+import {
+  fetchStudentSchedule,
+  normalizeScheduleToAvailabilityBlocks,
+} from "../services/studentClassSchedule.service.js";
 
 const { Op } = db.Sequelize;
 
@@ -1213,6 +1217,61 @@ export const cancelTimeOff = async (req, res) => {
 // 6. AVAILABILITY
 // ═════════════════════════════════════════════════════════════════════════════
 
+const toTimeString = (value) => String(value || "").slice(0, 8);
+
+const overlapsTime = (startA, endA, startB, endB) =>
+  toMinutes(startA) < toMinutes(endB) && toMinutes(endA) > toMinutes(startB);
+
+const isClassScheduleAvailability = (record) =>
+  record?.sourceType === "class_schedule"
+  || record?.recurrencePattern === "class_schedule"
+  || Boolean(record?.isSystemManaged);
+
+const ensureNoClassTimeOverrides = async ({ userId, entries, transaction }) => {
+  const classBlocks = await Availability.findAll({
+    where: {
+      userId,
+      specificDate: null,
+      isRecurring: true,
+      [Op.or]: [
+        { sourceType: "class_schedule" },
+        { recurrencePattern: "class_schedule" },
+        { isSystemManaged: true },
+      ],
+    },
+    transaction,
+  });
+
+  const classByDay = new Map();
+  for (const rec of classBlocks) {
+    const day = Number(rec.dayOfWeek);
+    if (!classByDay.has(day)) classByDay.set(day, []);
+    classByDay.get(day).push({
+      startTime: toTimeString(rec.startTime),
+      endTime: toTimeString(rec.endTime),
+    });
+  }
+
+  for (const entry of entries) {
+    const type = String(entry.availabilityType || "available").toLowerCase();
+    if (!["available", "preferred"].includes(type)) continue;
+    const day = Number(entry.dayOfWeek);
+    const classWindows = classByDay.get(day) || [];
+    for (const classWindow of classWindows) {
+      if (overlapsTime(entry.startTime, entry.endTime, classWindow.startTime, classWindow.endTime)) {
+        return {
+          conflict: true,
+          dayOfWeek: day,
+          startTime: entry.startTime,
+          endTime: entry.endTime,
+        };
+      }
+    }
+  }
+
+  return { conflict: false };
+};
+
 /**
  * GET /api/student/availability
  *
@@ -1234,6 +1293,236 @@ export const getMyAvailability = async (req, res) => {
   } catch (error) {
     logger.error(`[StudentController] getMyAvailability error: ${error.message}`);
     return fail(res, "Error retrieving availability.");
+  }
+};
+
+/**
+ * GET /api/student/availability/class-sync-status
+ */
+export const getClassScheduleSyncStatus = async (req, res) => {
+  try {
+    const userId = req.auth.userId;
+    const user = await User.findByPk(userId, { attributes: ["id"] });
+
+    if (!user) {
+      return fail(res, "User not found.", 404);
+    }
+
+    const whereClassBlocks = {
+      userId,
+      specificDate: null,
+      isRecurring: true,
+      [Op.or]: [
+        { sourceType: "class_schedule" },
+        { recurrencePattern: "class_schedule" },
+        { isSystemManaged: true },
+      ],
+    };
+
+    const classBlockCount = await Availability.count({ where: whereClassBlocks });
+
+    if (classBlockCount <= 0) {
+      return ok(res, {
+        lastSyncedAt: null,
+        status: "never_synced",
+        termCode: null,
+        totalClassBlocks: 0,
+        updated: 0,
+        error: null,
+      });
+    }
+
+    const latestClassRecord = await Availability.findOne({
+      where: whereClassBlocks,
+      attributes: ["syncBatchId", "updatedAt"],
+      order: [["updatedAt", "DESC"]],
+    });
+
+    const latestSyncBatchId = latestClassRecord?.syncBatchId || null;
+    const lastSyncedAt = latestClassRecord?.updatedAt || null;
+
+    const termFromBatchMatch = latestSyncBatchId
+      ? String(latestSyncBatchId).match(/^class-sync-\d+-(.+)-\d+$/)
+      : null;
+    const termCode = termFromBatchMatch?.[1] || null;
+
+    const updated = latestSyncBatchId
+      ? await Availability.count({
+        where: {
+          ...whereClassBlocks,
+          syncBatchId: latestSyncBatchId,
+        },
+      })
+      : 0;
+
+    return ok(res, {
+      lastSyncedAt,
+      status: "success",
+      termCode,
+      totalClassBlocks: classBlockCount,
+      updated,
+      error: null,
+    });
+  } catch (error) {
+    logger.error(`[StudentController] getClassScheduleSyncStatus error: ${error.message}`);
+    return fail(res, "Failed to retrieve class sync status.", 500);
+  }
+};
+
+/**
+ * POST /api/student/availability/sync-class-schedule
+ *
+ * Sync student's class meetings into recurring unavailable availability blocks.
+ * Existing class-schedule generated blocks are replaced atomically.
+ * Manual availability blocks are preserved.
+ */
+export const syncClassScheduleAvailability = async (req, res) => {
+  const transaction = await db.sequelize.transaction();
+  try {
+    const userId = req.auth.userId;
+    const fallbackUser = await User.findByPk(userId, {
+      attributes: ["id", "email"],
+      transaction,
+    });
+    const studentEmail = req.auth.email || fallbackUser?.email;
+
+    if (!studentEmail) {
+      await transaction.rollback();
+      return fail(res, "Student email not found. Cannot sync class schedule.", 400);
+    }
+
+    const { termCode } = req.body || {};
+    const { payload, termCode: resolvedTermCode } = await fetchStudentSchedule({
+      email: studentEmail,
+      termCode,
+    });
+
+    const sanitizedTermCode = String(resolvedTermCode || "unknown")
+      .replace(/[^a-zA-Z0-9_-]/g, "")
+      .slice(0, 32) || "unknown";
+    const syncBatchId = `class-sync-${userId}-${sanitizedTermCode}-${Date.now()}`;
+    const syncTimestamp = new Date();
+
+    const desiredBlocks = normalizeScheduleToAvailabilityBlocks(payload).map((block) => ({
+      ...block,
+      userId,
+      specificDate: null,
+      syncBatchId,
+    }));
+
+    const existingClassRecords = await Availability.findAll({
+      where: {
+        userId,
+        specificDate: null,
+        isRecurring: true,
+        [Op.or]: [
+          { sourceType: "class_schedule" },
+          { recurrencePattern: "class_schedule" },
+          { isSystemManaged: true },
+        ],
+      },
+      transaction,
+    });
+
+    const makeSignature = (entry) => {
+      const dayOfWeek = Number(entry.dayOfWeek);
+      const startTime = String(entry.startTime || "").slice(0, 8);
+      const endTime = String(entry.endTime || "").slice(0, 8);
+      const availabilityType = String(entry.availabilityType || "available");
+      const sourceType = String(entry.sourceType || "class_schedule");
+      const sourceRef = String(entry.sourceRef || "");
+      return [dayOfWeek, startTime, endTime, availabilityType, sourceType, sourceRef].join("|");
+    };
+
+    const existingBySignature = new Map();
+    const duplicateExistingIds = [];
+
+    for (const rec of existingClassRecords) {
+      const signature = makeSignature(rec);
+      if (existingBySignature.has(signature)) {
+        duplicateExistingIds.push(rec.id);
+        continue;
+      }
+      existingBySignature.set(signature, rec);
+    }
+
+    const desiredBySignature = new Map();
+    for (const block of desiredBlocks) {
+      const signature = makeSignature(block);
+      if (!desiredBySignature.has(signature)) {
+        desiredBySignature.set(signature, block);
+      }
+    }
+
+    const toCreate = [];
+    const matchedExistingIds = [];
+    let unchanged = 0;
+    for (const [signature, block] of desiredBySignature.entries()) {
+      const matched = existingBySignature.get(signature);
+      if (matched) {
+        unchanged += 1;
+        matchedExistingIds.push(matched.id);
+      } else {
+        toCreate.push(block);
+      }
+    }
+
+    const toDeleteIds = [
+      ...duplicateExistingIds,
+      ...existingClassRecords
+        .filter((rec) => !desiredBySignature.has(makeSignature(rec)))
+        .map((rec) => rec.id),
+    ];
+
+    if (toDeleteIds.length > 0) {
+      await Availability.destroy({
+        where: { id: toDeleteIds },
+        transaction,
+      });
+    }
+
+    if (toCreate.length > 0) {
+      await Availability.bulkCreate(toCreate, { transaction });
+    }
+
+    let updated = 0;
+    if (matchedExistingIds.length > 0) {
+      const [updatedCount] = await Availability.update(
+        {
+          sourceType: "class_schedule",
+          recurrencePattern: "class_schedule",
+          isSystemManaged: true,
+          syncBatchId,
+          updatedAt: syncTimestamp,
+        },
+        {
+          where: { id: matchedExistingIds },
+          transaction,
+        }
+      );
+      updated = Number(updatedCount) || 0;
+    }
+
+    await transaction.commit();
+
+    return ok(
+      res,
+      {
+        synced: true,
+        termCode: resolvedTermCode,
+        syncBatchId,
+        lastSyncedAt: syncTimestamp.toISOString(),
+        created: toCreate.length,
+        updated,
+        deleted: toDeleteIds.length,
+        unchanged,
+      },
+      "Class schedule synced into availability."
+    );
+  } catch (error) {
+    await transaction.rollback();
+    logger.error(`[StudentController] syncClassScheduleAvailability error: ${error.message}`);
+    return fail(res, "Failed to sync class schedule into availability.", 502);
   }
 };
 
@@ -1275,6 +1564,20 @@ export const updateMyAvailability = async (req, res) => {
         await transaction.rollback();
         return fail(res, `availabilityType must be one of: ${validTypes.join(", ")}`, 400);
       }
+    }
+
+    const classOverrideCheck = await ensureNoClassTimeOverrides({
+      userId,
+      entries,
+      transaction,
+    });
+    if (classOverrideCheck.conflict) {
+      await transaction.rollback();
+      return fail(
+        res,
+        `Availability overlaps locked class time on day ${classOverrideCheck.dayOfWeek} (${classOverrideCheck.startTime}-${classOverrideCheck.endTime}).`,
+        409
+      );
     }
 
     // Remove existing recurring availability (keep specific-date overrides)
@@ -1654,7 +1957,7 @@ export const getTimesheet = async (req, res) => {
 
     const entries = clockRecords.map((cr) => {
       const breaks = breaksByClockId[cr.clock_id] || [];
-      const breakMins = breaks.reduce((sum, b) => {
+      const breakMinsRaw = breaks.reduce((sum, b) => {
         if (b.break_start && b.break_end) {
           return sum + Math.round(
             (new Date(b.break_end).getTime() - new Date(b.break_start).getTime()) / 60000
@@ -1663,9 +1966,13 @@ export const getTimesheet = async (req, res) => {
         return sum;
       }, 0);
 
-      const workedMins = cr.clock_out
+      const workedMinsRaw = cr.clock_out
         ? Math.round((new Date(cr.clock_out).getTime() - new Date(cr.clock_in).getTime()) / 60000)
         : Math.round((Date.now() - new Date(cr.clock_in).getTime()) / 60000);
+
+      const workedMins = Math.max(0, workedMinsRaw);
+      const breakMins = Math.max(0, Math.min(breakMinsRaw, workedMins));
+      const netMins = Math.max(0, workedMins - breakMins);
 
       const scheduledMins = cr.shift
         ? Math.max(0, toMinutes(cr.shift.end_time) - toMinutes(cr.shift.start_time))
@@ -1684,7 +1991,16 @@ export const getTimesheet = async (req, res) => {
         scheduledEnd: cr.shift?.end_time || null,
         workedMinutes: workedMins,
         breakMinutes: breakMins,
-        netMinutes: workedMins - breakMins,
+        netMinutes: netMins,
+        // Backward-compatible aliases used by some clients/views
+        clock_in: cr.clock_in,
+        clock_out: cr.clock_out,
+        scheduled_start: cr.shift?.start_time || null,
+        scheduled_end: cr.shift?.end_time || null,
+        break_minutes: breakMins,
+        worked_minutes: workedMins,
+        net_minutes: netMins,
+        total_hours: +(netMins / 60).toFixed(2),
         department: cr.shift?.department || null,
         position: cr.shift?.position || null,
         breaks,
@@ -1696,9 +2012,9 @@ export const getTimesheet = async (req, res) => {
       summary: {
         totalWorkedMinutes,
         totalBreakMinutes,
-        totalNetMinutes: totalWorkedMinutes - totalBreakMinutes,
+        totalNetMinutes: Math.max(0, totalWorkedMinutes - totalBreakMinutes),
         totalWorkedHours: +(totalWorkedMinutes / 60).toFixed(1),
-        totalNetHours: +((totalWorkedMinutes - totalBreakMinutes) / 60).toFixed(1),
+        totalNetHours: +(Math.max(0, totalWorkedMinutes - totalBreakMinutes) / 60).toFixed(1),
         totalScheduledMinutes,
         totalScheduledHours: +(totalScheduledMinutes / 60).toFixed(1),
       },
