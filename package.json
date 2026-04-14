@@ -6,6 +6,7 @@
   "main": "server.js",
   "scripts": {
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:integration": "node --experimental-vm-modules node_modules/jest/bin/jest.js --testPathPattern='__tests__/integration'",
     "start": "node server.js",
     "schema:sync": "node scripts/ensureProductionSchema.mjs",
     "bundle": "rm -rf deploy && mkdir deploy && cp -r app migrations scripts config server.js package.json package-lock.json workerscheduling-t2-backend.service .env .sequelizerc deploy"
@@ -32,8 +33,10 @@
     "morgan": "^1.10.0",
     "multer": "^2.1.0",
     "mysql2": "^2.3.3",
+    "nodemailer": "^6.10.1",
     "sequelize": "^6.19.0",
     "supertest": "^6.3.3",
+    "twilio": "^5.10.4",
     "winston": "^3.11.0",
     "winston-daily-rotate-file": "^4.7.1"
   },

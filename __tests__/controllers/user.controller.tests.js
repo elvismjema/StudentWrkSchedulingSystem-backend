@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 const mockUserFindByPk = jest.fn();
 const mockUserFindAll = jest.fn();
 const mockUserFindOne = jest.fn();
@@ -9,7 +10,7 @@ const mockShiftFindAll = jest.fn();
 const mockShiftDestroy = jest.fn();
 const mockSessionUpdate = jest.fn();
 
-jest.mock("../../app/config/logger.js", () => ({
+jest.mock("app/config/logger.js", () => ({
   __esModule: true,
   default: {
     info: jest.fn(),
@@ -19,7 +20,7 @@ jest.mock("../../app/config/logger.js", () => ({
   },
 }));
 
-jest.mock("../../app/models/index.js", () => ({
+jest.mock("app/models/index.js", () => ({
   __esModule: true,
   default: {
     user: {
@@ -49,8 +50,8 @@ jest.mock("../../app/models/index.js", () => ({
   },
 }));
 
-const controller = require("../../app/controllers/user.controller.js");
-const { deactivateUser } = controller.default || controller;
+import controller from "app/controllers/user.controller.js";
+const { deactivateUser } = controller;
 
 const mockReq = (body = {}, params = {}, query = {}) => ({
   body,

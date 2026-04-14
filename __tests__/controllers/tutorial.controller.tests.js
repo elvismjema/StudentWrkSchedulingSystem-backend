@@ -4,7 +4,7 @@ import request from "supertest";
 const mockFindAllFunction = jest.fn().mockResolvedValue(Promise.resolve([]));
 const mockFindByPkFunction = jest.fn().mockResolvedValue(Promise.resolve([]));
 
-jest.mock("../../app/models", () => ({
+jest.mock("app/models/index.js", () => ({
   sequelize: {
     sync: jest.fn(),
   },
@@ -19,10 +19,10 @@ jest.mock("../../app/models", () => ({
   },
 }));
 
-const db = await import("../../app/models");
+const db = await import("app/models/index.js");
 const authFunction = jest.fn().mockImplementation((req, res, next) => next());
 const authenticate = jest.mock(
-  "../../app/authorization/authorization.js",
+  "app/authorization/authorization.js",
   () => ({
     authenticate: authFunction,
   })
