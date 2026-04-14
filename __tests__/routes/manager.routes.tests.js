@@ -1,11 +1,11 @@
 import { describe, it, expect } from "@jest/globals";
-import router from "../../app/routes/manager.routes.js";
-import authenticate from "../../app/authorization/authorization.js";
-import requireManager from "../../app/authorization/requireManager.js";
+import router from "app/routes/manager.routes.js";
+import authenticate from "app/authorization/authorization.js";
+import requireManager from "app/authorization/requireManager.js";
 import {
   getManagerOverview,
   getWorkerBlockingAvailability,
-} from "../../app/controllers/manager.controller.js";
+} from "app/controllers/manager.controller.js";
 
 describe("manager routes", () => {
   it("protects overview endpoint with auth + manager middleware", () => {

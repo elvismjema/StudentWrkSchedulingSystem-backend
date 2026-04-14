@@ -1,8 +1,9 @@
 
 import request from "supertest";
-import db from "../../app/models/index.js";
+import db from "app/models/index.js";
 import app from "../../server.js";
 import { setupTestData } from "../helpers/testData.js";
+import { createQualification, listQualifications, updateQualification, deleteQualification, uploadQualificationDocument, listStudentsWithQualifications, getStudentQualifications, reviewQualificationDocument } from "app/controllers/qualification.controller.js";
 
 describe("Qualification Controller Tests", () => {
   let testData;
@@ -259,7 +260,7 @@ jest.mock("fs/promises", () => ({
   },
 }));
 
-jest.mock("../../app/models/index.js", () => ({
+jest.mock("app/models/index.js", () => ({
   __esModule: true,
   default: {
     qualification: {
@@ -279,16 +280,6 @@ jest.mock("../../app/models/index.js", () => ({
   },
 }));
 
-const {
-  createQualification,
-  listQualifications,
-  updateQualification,
-  deleteQualification,
-  uploadQualificationDocument,
-  listStudentsWithQualifications,
-  getStudentQualifications,
-  reviewQualificationDocument,
-} = require("../../app/controllers/qualification.controller.js");
 
 const mockReq = (body = {}, params = {}, query = {}) => ({
   body,

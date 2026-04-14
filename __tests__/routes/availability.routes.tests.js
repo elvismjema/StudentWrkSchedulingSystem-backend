@@ -1,8 +1,8 @@
 import { describe, it, expect } from "@jest/globals";
-import router from "../../app/routes/availability.routes.js";
-import authenticate from "../../app/authorization/authorization.js";
-import requireAdmin from "../../app/authorization/requireAdmin.js";
-import availabilityController from "../../app/controllers/availability.controller.js";
+import router from "app/routes/availability.routes.js";
+import authenticate from "app/authorization/authorization.js";
+import requireAdmin from "app/authorization/requireAdmin.js";
+import availabilityController from "app/controllers/availability.controller.js";
 
 describe("availability routes auth protection", () => {
   it("Given: availability routes are registered, When: inspecting route stack, Then: each endpoint includes authentication middleware", () => {

@@ -1,9 +1,10 @@
+import { jest } from '@jest/globals';
 const mockCreate = jest.fn();
 const mockFindAll = jest.fn();
 const mockFindByPk = jest.fn();
 const mockDeptFindByPk = jest.fn();
 
-jest.mock("../../app/models/index.js", () => ({
+jest.mock("app/models/index.js", () => ({
   __esModule: true,
   default: {
     departmentHours: {
@@ -18,12 +19,7 @@ jest.mock("../../app/models/index.js", () => ({
   },
 }));
 
-const {
-  addDepartmentHours,
-  listDepartmentHours,
-  updateDepartmentHours,
-  deleteDepartmentHours,
-} = require("../../app/controllers/department_hours.controller.js");
+import { addDepartmentHours, listDepartmentHours, updateDepartmentHours, deleteDepartmentHours } from "app/controllers/department_hours.controller.js";
 
 const mockReq = (body = {}, params = {}, query = {}) => ({
   body,

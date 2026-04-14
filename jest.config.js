@@ -1,3 +1,5 @@
+// Default config runs unit tests only (no DB required).
+// Run integration tests separately: npm run test:integration
 export default {
   testEnvironment: 'node',
   transform: {},
@@ -6,8 +8,12 @@ export default {
     'node_modules/(?!(supertest)/)'
   ],
   roots: ['<rootDir>/__tests__'],
+  modulePaths: ['<rootDir>'],
   testMatch: [
     '**/__tests__/**/*.tests.js'
+  ],
+  testPathIgnorePatterns: [
+    '<rootDir>/__tests__/integration/'
   ],
   collectCoverageFrom: [
     'app/**/*.js',
