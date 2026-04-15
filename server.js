@@ -20,6 +20,10 @@ const addMissingColumns = async () => {
     { table: 'users', column: 'is_active', sql: 'ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1' },
     { table: 'users', column: 'deactivated_at', sql: 'ADD COLUMN deactivated_at DATETIME NULL' },
     { table: 'positions', column: 'is_critical', sql: "ADD COLUMN is_critical TINYINT(1) NOT NULL DEFAULT 0" },
+    { table: 'availabilities', column: 'sourceType', sql: "ADD COLUMN sourceType VARCHAR(255) NULL DEFAULT NULL" },
+    { table: 'availabilities', column: 'sourceRef', sql: "ADD COLUMN sourceRef VARCHAR(255) NULL DEFAULT NULL" },
+    { table: 'availabilities', column: 'isSystemManaged', sql: "ADD COLUMN isSystemManaged TINYINT(1) NOT NULL DEFAULT 0" },
+    { table: 'availabilities', column: 'syncBatchId', sql: "ADD COLUMN syncBatchId VARCHAR(255) NULL DEFAULT NULL" },
     {
       table: 'user_departments',
       column: 'request_status',

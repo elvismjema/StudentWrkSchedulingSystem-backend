@@ -1,3 +1,5 @@
+import https from "https";
+
 const STUDENT_SCHEDULE_API_BASE = "https://stingray.oc.edu/api/accommodationuserschedule";
 
 const DAY_CODE_TO_WEEKDAY = {
@@ -36,26 +38,71 @@ const getCurrentTermCode = () => {
   return `${year}FA`;
 };
 
+const httpsRequestJson = (url, { method = "GET", headers = {} } = {}) =>
+  new Promise((resolve, reject) => {
+    const req = https.request(url, { method, headers }, (res) => {
+      let raw = "";
+
+      res.on("data", (chunk) => {
+        raw += chunk;
+      });
+
+      res.on("end", () => {
+        let payload = {};
+
+        if (raw) {
+          try {
+            payload = JSON.parse(raw);
+          } catch (error) {
+            const parseError = new Error(`Class schedule API returned invalid JSON (status ${res.statusCode}).`);
+            parseError.statusCode = 502;
+            reject(parseError);
+            return;
+          }
+        }
+
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(payload);
+          return;
+        }
+
+        const message =
+          payload?.Message ||
+          payload?.message ||
+          `Class schedule API error (${res.statusCode}).`;
+        const error = new Error(message);
+        error.statusCode = res.statusCode >= 400 && res.statusCode < 500 ? res.statusCode : 502;
+        reject(error);
+      });
+    });
+
+    req.on("error", (error) => {
+      error.statusCode = error.statusCode || 502;
+      reject(error);
+    });
+
+    req.end();
+  });
+
 export const fetchStudentSchedule = async ({ email, termCode }) => {
   if (!email) {
-    throw new Error("Student email is required to fetch class schedule.");
+    const error = new Error("Student email is required to fetch class schedule.");
+    error.statusCode = 400;
+    throw error;
   }
 
   const resolvedTermCode = termCode || getCurrentTermCode();
   const url = `${STUDENT_SCHEDULE_API_BASE}/${encodeURIComponent(email)}/${encodeURIComponent(resolvedTermCode)}`;
 
-  const response = await fetch(url, {
+  const payload = await httpsRequestJson(url, {
     method: "GET",
     headers: { "Content-Type": "application/json" },
   });
-
-  if (!response.ok) {
-    throw new Error(`Class schedule API error (${response.status}).`);
-  }
-
-  const payload = await response.json();
   if (!payload || payload.Success !== "True") {
-    throw new Error("Class schedule API returned unsuccessful response.");
+    const message = String(payload?.Message || "Class schedule API returned unsuccessful response.");
+    const error = new Error(message);
+    error.statusCode = /user does not exist/i.test(message) ? 404 : 502;
+    throw error;
   }
 
   return {
