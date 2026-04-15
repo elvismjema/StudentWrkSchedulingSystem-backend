@@ -1522,7 +1522,9 @@ export const syncClassScheduleAvailability = async (req, res) => {
   } catch (error) {
     await transaction.rollback();
     logger.error(`[StudentController] syncClassScheduleAvailability error: ${error.message}`);
-    return fail(res, "Failed to sync class schedule into availability.", 502);
+    const status = Number(error?.statusCode || error?.status || 502);
+    const message = error?.message || "Failed to sync class schedule into availability.";
+    return fail(res, message, status >= 400 ? status : 502);
   }
 };
 

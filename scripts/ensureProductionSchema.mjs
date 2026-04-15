@@ -44,6 +44,38 @@ const main = async () => {
   );
 
   appliedChanges += Number(
+    await ensureColumn("availabilities", "sourceType", {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: null,
+    }),
+  );
+
+  appliedChanges += Number(
+    await ensureColumn("availabilities", "sourceRef", {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: null,
+    }),
+  );
+
+  appliedChanges += Number(
+    await ensureColumn("availabilities", "isSystemManaged", {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    }),
+  );
+
+  appliedChanges += Number(
+    await ensureColumn("availabilities", "syncBatchId", {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: null,
+    }),
+  );
+
+  appliedChanges += Number(
     await ensureColumn("notifications", "type", {
       type: DataTypes.ENUM(
         "shift_assignment",
