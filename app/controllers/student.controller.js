@@ -63,6 +63,31 @@ const ok = (res, data, message = null, status = 200) =>
 const fail = (res, message, status = 500) =>
   res.status(status).json({ success: false, message });
 
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
+
+const resolveUserIdFromAuth = async (auth, { transaction } = {}) => {
+  const directUserId = Number(auth?.userId);
+  if (Number.isInteger(directUserId) && directUserId > 0) {
+    return directUserId;
+  }
+
+  const normalizedEmail = normalizeEmail(auth?.email);
+  if (!normalizedEmail) {
+    return null;
+  }
+
+  const userByEmail = await User.findOne({
+    where: db.Sequelize.where(
+      db.Sequelize.fn("LOWER", db.Sequelize.col("email")),
+      normalizedEmail
+    ),
+    attributes: ["id"],
+    ...(transaction ? { transaction } : {}),
+  });
+
+  return userByEmail?.id || null;
+};
+
 /**
  * Convert HH:mm or HH:mm:ss to total minutes since midnight.
  * @param {string} t - Time string
@@ -1301,10 +1326,9 @@ export const getMyAvailability = async (req, res) => {
  */
 export const getClassScheduleSyncStatus = async (req, res) => {
   try {
-    const userId = req.auth.userId;
-    const user = await User.findByPk(userId, { attributes: ["id"] });
+    const userId = await resolveUserIdFromAuth(req.auth);
 
-    if (!user) {
+    if (!userId) {
       return fail(res, "User not found.", 404);
     }
 
@@ -1379,16 +1403,17 @@ export const getClassScheduleSyncStatus = async (req, res) => {
 export const syncClassScheduleAvailability = async (req, res) => {
   const transaction = await db.sequelize.transaction();
   try {
-    const userId = req.auth.userId;
-    const fallbackUser = await User.findByPk(userId, {
-      attributes: ["id", "email"],
-      transaction,
-    });
-    const studentEmail = req.auth.email || fallbackUser?.email;
+    const userId = await resolveUserIdFromAuth(req.auth, { transaction });
+    const studentEmail = req.auth.email;
 
     if (!studentEmail) {
       await transaction.rollback();
       return fail(res, "Student email not found. Cannot sync class schedule.", 400);
+    }
+
+    if (!userId) {
+      await transaction.rollback();
+      return fail(res, "Could not resolve user account. Please log out and back in.", 400);
     }
 
     const { termCode } = req.body || {};
@@ -1537,11 +1562,7 @@ export const syncClassScheduleAvailability = async (req, res) => {
  */
 export const debugClassScheduleRaw = async (req, res) => {
   try {
-    const userId = req.auth.userId;
-    const fallbackUser = await User.findByPk(userId, {
-      attributes: ["id", "email"],
-    });
-    const studentEmail = req.auth.email || fallbackUser?.email;
+    const studentEmail = req.auth.email;
 
     if (!studentEmail) {
       return fail(res, "Student email not found.", 400);
