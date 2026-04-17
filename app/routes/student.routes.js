@@ -30,7 +30,6 @@ import {
   getClassScheduleSyncStatus,
   updateMyAvailability,
   syncClassScheduleAvailability,
-  debugClassScheduleRaw,
   // 7. Clock In/Out & Breaks
   studentClockIn,
   studentClockOut,
@@ -82,7 +81,6 @@ router.get("/availability", [authenticate], getMyAvailability);
 router.get("/availability/class-sync-status", [authenticate], getClassScheduleSyncStatus);
 router.put("/availability", [authenticate], updateMyAvailability);
 router.post("/availability/sync-class-schedule", [authenticate], syncClassScheduleAvailability);
-router.get("/availability/class-schedule-debug", [authenticate], debugClassScheduleRaw);
 
 // ── 7. Clock In/Out & Breaks ─────────────────────────────────────────────────
 router.post("/clock-in", [authenticate], studentClockIn);
