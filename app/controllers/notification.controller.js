@@ -55,18 +55,19 @@ export const getAllNotifications = async (req, res) => {
     const authUserId = Number(req.auth?.userId);
     const authEmail = req.auth?.email;
     const authRole = await resolveHighestRoleForUser(authUserId, authEmail);
+    const isPrivileged = authRole === "manager" || authRole === "admin";
 
     let condition = {};
 
     if (requestedUserId) {
-      if (requestedUserId !== authUserId && authRole !== "manager" && authRole !== "admin") {
-        return res.status(403).json({
-          success: false,
-          message: "Forbidden! You can only read your own notifications.",
-        });
+      if (isPrivileged) {
+        condition.userId = requestedUserId;
+      } else {
+        // Gracefully tolerate stale clients sending mismatched userId query.
+        // Students should only ever receive their own notifications.
+        condition.userId = authUserId;
       }
-      condition.userId = requestedUserId;
-    } else if (authRole !== "manager" && authRole !== "admin") {
+    } else if (!isPrivileged) {
       condition.userId = authUserId;
     }
 
