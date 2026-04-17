@@ -1529,6 +1529,48 @@ export const syncClassScheduleAvailability = async (req, res) => {
 };
 
 /**
+ * GET /api/student/availability/class-schedule-debug
+ *
+ * Diagnostic endpoint: returns the RAW Stingray API response and the
+ * parsed availability blocks so we can see exactly what the external API
+ * sends back. Remove or gate behind admin role once debugging is done.
+ */
+export const debugClassScheduleRaw = async (req, res) => {
+  try {
+    const userId = req.auth.userId;
+    const fallbackUser = await User.findByPk(userId, {
+      attributes: ["id", "email"],
+    });
+    const studentEmail = req.auth.email || fallbackUser?.email;
+
+    if (!studentEmail) {
+      return fail(res, "Student email not found.", 400);
+    }
+
+    const { termCode } = req.query || {};
+    const { payload, termCode: resolvedTermCode } = await fetchStudentSchedule({
+      email: studentEmail,
+      termCode,
+    });
+
+    const parsedBlocks = normalizeScheduleToAvailabilityBlocks(payload);
+
+    return ok(res, {
+      studentEmail,
+      termCode: resolvedTermCode,
+      rawApiResponse: payload,
+      rawApiKeys: payload ? Object.keys(payload) : [],
+      parsedBlockCount: parsedBlocks.length,
+      parsedBlocks,
+    }, "Debug: raw Stingray response + parsed blocks");
+  } catch (error) {
+    logger.error(`[DebugClassSchedule] ${error.message}`);
+    const status = Number(error?.statusCode || 502);
+    return fail(res, error.message, status >= 400 ? status : 502);
+  }
+};
+
+/**
  * PUT /api/student/availability
  *
  * Update own availability (weekly recurring pattern).
