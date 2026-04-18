@@ -128,6 +128,103 @@ const getCurrentWeekRange = () => {
   };
 };
 
+/**
+ * Build a predicate that returns true when a candidate shift is blocked by the
+ * student's availability. A shift is considered unavailable when it overlaps
+ * with any of the following:
+ *   - An `availabilityType` of "unavailable" or "time_off" block for the same
+ *     day-of-week (recurring) that overlaps the shift's time window.
+ *   - A block with a `specificDate` that matches the shift date and overlaps
+ *     the shift's time window.
+ *   - An approved `TimeOffRequest` whose date range contains the shift date.
+ *
+ * NOTE: class-schedule-sourced rows are stored as "unavailable" with
+ * `sourceType='class_schedule'`, so they are included automatically.
+ *
+ * @param {number} userId
+ * @param {Array<{shift_date:string,start_time:string,end_time:string}>} shifts
+ * @returns {Promise<Array>} filtered shifts (no conflicts)
+ */
+const filterOutUnavailableShifts = async (userId, shifts) => {
+  if (!Array.isArray(shifts) || shifts.length === 0) return shifts || [];
+
+  // Determine the shift-date window so we only pull the relevant availability rows.
+  const dateStrings = shifts
+    .map((s) => s.shift_date)
+    .filter(Boolean)
+    .sort();
+  const minDate = dateStrings[0];
+  const maxDate = dateStrings[dateStrings.length - 1];
+
+  const [blockingBlocks, approvedTimeOff] = await Promise.all([
+    Availability.findAll({
+      where: {
+        userId,
+        availabilityType: { [Op.in]: ["unavailable", "time_off"] },
+        [Op.or]: [
+          { specificDate: null },
+          { specificDate: { [Op.between]: [minDate, maxDate] } },
+        ],
+      },
+      attributes: [
+        "dayOfWeek",
+        "startTime",
+        "endTime",
+        "specificDate",
+        "availabilityType",
+        "sourceType",
+      ],
+    }),
+    TimeOffRequest.findAll({
+      where: {
+        user_id: userId,
+        status: "approved",
+        start_date: { [Op.lte]: maxDate },
+        end_date: { [Op.gte]: minDate },
+      },
+      attributes: ["start_date", "end_date"],
+    }),
+  ]);
+
+  const overlapsTime = (aStart, aEnd, bStart, bEnd) =>
+    toMinutes(aStart) < toMinutes(bEnd) && toMinutes(aEnd) > toMinutes(bStart);
+
+  // Day-of-week for an ISO date string (0=Sunday..6=Saturday to match the
+  // Availability.dayOfWeek convention).
+  const getDayOfWeekForDate = (dateOnly) => {
+    const [y, m, d] = String(dateOnly).split("-").map(Number);
+    return new Date(y, m - 1, d).getDay();
+  };
+
+  return shifts.filter((shift) => {
+    const shiftDate = shift.shift_date;
+    const dow = getDayOfWeekForDate(shiftDate);
+
+    // Hard block: approved time-off covering the shift date.
+    for (const to of approvedTimeOff) {
+      if (shiftDate >= to.start_date && shiftDate <= to.end_date) return false;
+    }
+
+    // Availability blocks: prefer specificDate matches, fall back to recurring dayOfWeek.
+    for (const block of blockingBlocks) {
+      if (block.specificDate) {
+        if (
+          block.specificDate === shiftDate &&
+          overlapsTime(shift.start_time, shift.end_time, block.startTime, block.endTime)
+        ) {
+          return false;
+        }
+      } else if (Number(block.dayOfWeek) === dow) {
+        if (overlapsTime(shift.start_time, shift.end_time, block.startTime, block.endTime)) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  });
+};
+
 /** Shared include array for shift queries */
 const shiftIncludes = [
   { model: Department, as: "department", attributes: ["department_id", "department_name"] },
@@ -241,9 +338,11 @@ export const getDashboard = async (req, res) => {
         },
       }),
 
-      // Open shifts: unassigned + needing cover — only from student's departments
+      // Open shifts: unassigned + needing cover — only from student's departments.
+      // NOTE: we intentionally over-fetch here so the availability filter below
+      // has a pool to draw from before we slice to the preview size.
       userDeptIds.length > 0
-        ? Shift.findAndCountAll({
+        ? Shift.findAll({
             where: {
               is_published: true,
               shift_date: { [Op.gte]: today },
@@ -266,10 +365,14 @@ export const getDashboard = async (req, res) => {
               { model: Position, as: "position", attributes: ["position_id", "position_name"] },
             ],
             order: [["shift_date", "ASC"], ["start_time", "ASC"]],
-            limit: 3,
+            limit: 50,
           })
-        : Promise.resolve({ count: 0, rows: [] }),
+        : Promise.resolve([]),
     ]);
+
+    // Hide shifts that conflict with the student's declared unavailability
+    // (manual unavailable blocks, class-schedule blocks, approved time-off).
+    const availableOpenShifts = await filterOutUnavailableShifts(userId, openShifts);
 
     // Derive next shift (first today shift with end_time > now, or first future shift this week)
     // Use UTC consistently — today is already UTC, so nowMinutes must also be UTC
@@ -319,8 +422,8 @@ export const getDashboard = async (req, res) => {
       },
       unreadNotifications: unreadCount,
       openShifts: {
-        count: openShifts.count,
-        preview: openShifts.rows,
+        count: availableOpenShifts.length,
+        preview: availableOpenShifts.slice(0, 3),
       },
     });
   } catch (error) {
@@ -473,7 +576,10 @@ export const getOpenShifts = async (req, res) => {
       assigned_user_id: null,
     };
 
-    const { count, rows } = await Shift.findAndCountAll({
+    // Fetch the whole eligible pool, then drop shifts that conflict with the
+    // student's unavailability (class schedule, manual unavailable blocks,
+    // approved time-off). Paginate after filtering so page counts stay accurate.
+    const eligibleRows = await Shift.findAll({
       where,
       include: [
         { model: Department, as: "department", attributes: ["department_id", "department_name"] },
@@ -481,11 +587,12 @@ export const getOpenShifts = async (req, res) => {
         { model: User, as: "assignedUser", attributes: ["id", "fName", "lName"], required: false },
       ],
       order: [["shift_date", "ASC"], ["start_time", "ASC"]],
-      limit,
-      offset,
     });
 
-    return ok(res, { count, shifts: rows, page, limit });
+    const availableRows = await filterOutUnavailableShifts(userId, eligibleRows);
+    const pagedRows = availableRows.slice(offset, offset + limit);
+
+    return ok(res, { count: availableRows.length, shifts: pagedRows, page, limit });
   } catch (error) {
     logger.error(`[StudentController] getOpenShifts error: ${error.message}`);
     return fail(res, "Error retrieving open shifts.");
