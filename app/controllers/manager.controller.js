@@ -403,26 +403,44 @@ export const reviewSwapRequest = async (req, res) => {
       }
 
       if (action === "decline") {
-        // Deny the pickup — shift goes back to being open for other volunteers
-        swapReq.status = "accepted";
-        swapReq.respondent_user_id = null;
-        swapReq.respondent_notes = null;
+        const deniedVolunteerId = swapReq.respondent_user_id;
+        const isDirectOpenShiftClaim =
+          !shift.assigned_user_id &&
+          swapReq.requester_user_id &&
+          swapReq.requester_user_id === swapReq.respondent_user_id;
+
+        // Deny the pickup:
+        // - direct open-shift claim => reject claim
+        // - cover pickup flow => keep request open for other volunteers
+        swapReq.status = isDirectOpenShiftClaim ? "rejected" : "accepted";
+        if (!isDirectOpenShiftClaim) {
+          swapReq.respondent_user_id = null;
+          swapReq.respondent_notes = null;
+        }
         swapReq.manager_notes = notes || null;
+        swapReq.reviewed_by = managerId;
+        swapReq.reviewed_at = new Date();
         swapReq.updated_at = new Date();
         await swapReq.save({ transaction });
 
-        // Shift stays as approved_cover (still open for others)
+        // Shift stays open in both flows.
         await transaction.commit();
 
         // Notify the rejected volunteer
         sendNotification(
-          swapReq.respondent_user_id,
+          deniedVolunteerId,
           "Shift Pickup Request Denied",
           `${managerName} denied your request to pick up the shift on ${shift.shift_date}.${declineMsg ? " " + declineMsg : ""} The shift remains open for other workers.`,
           { type: "shift_change" }
         ).catch((err) => logger.error(`Notification error: ${err.message}`));
 
-        return ok(res, swapReq, "Pickup request denied. Shift remains open.");
+        return ok(
+          res,
+          swapReq,
+          isDirectOpenShiftClaim
+            ? "Open shift pickup request denied."
+            : "Pickup request denied. Shift remains open.",
+        );
       }
 
       // Approve Stage 2 — reassign shift to volunteer
@@ -668,134 +686,5 @@ export const reviewManagerTimeOffRequest = async (req, res) => {
   } catch (error) {
     logger.error(`[ManagerController] reviewManagerTimeOffRequest error: ${error.message}`);
     return fail(res, "Error reviewing time-off request.", 500);
-  }
-};
-
-// ═════════════════════════════════════════════════════════════════════════════
-// OPEN SHIFT CLAIM APPROVAL
-// ═════════════════════════════════════════════════════════════════════════════
-
-export const getManagerOpenShiftClaims = async (req, res) => {
-  try {
-    const departmentIds = await getDepartmentScope(req);
-    if (!departmentIds.length) return ok(res, []);
-
-    // Only show claims for truly unassigned open shifts (the direct-claim flow).
-    // Cover-approved pickup requests (approved_cover shift) are handled via swap-requests.
-    const where = {
-      type: "find_cover",
-      status: "manager_pending",
-    };
-
-    const claims = await db.shiftSwapRequest.findAll({
-      where,
-      include: [
-        {
-          model: db.shift,
-          as: "requesterShift",
-          where: {
-            department_id: { [Op.in]: departmentIds },
-            assigned_user_id: null,          // Truly unassigned open shifts only
-          },
-          required: true,
-          include: [
-            { model: db.department, as: "department", attributes: ["department_id", "department_name"] },
-            { model: db.position, as: "position", attributes: ["position_id", "position_name"] },
-          ],
-        },
-        {
-          model: db.user,
-          as: "requester",
-          attributes: ["id", "fName", "lName", "email"],
-          required: true,
-        },
-      ],
-      order: [["created_at", "DESC"]],
-    });
-
-    return ok(res, claims);
-  } catch (error) {
-    logger.error(`[ManagerController] getManagerOpenShiftClaims error: ${error.message}`);
-    return fail(res, "Error retrieving open shift claims.", 500);
-  }
-};
-
-export const reviewManagerOpenShiftClaim = async (req, res) => {
-  const transaction = await db.sequelize.transaction();
-  try {
-    const managerId = req.auth?.userId;
-    const claimId = Number(req.params.id);
-    const action = String(req.body?.action || "").toLowerCase();
-    const notes = req.body?.notes || null;
-
-    if (!["approve", "reject"].includes(action)) {
-      await transaction.rollback();
-      return fail(res, "action must be 'approve' or 'reject'.", 400);
-    }
-
-    const departmentIds = await getDepartmentScope(req);
-    const claim = await db.shiftSwapRequest.findByPk(claimId, { transaction });
-    if (!claim) {
-      await transaction.rollback();
-      return fail(res, "Open shift claim not found.", 404);
-    }
-
-    if (claim.type !== "find_cover" || claim.status !== "manager_pending") {
-      await transaction.rollback();
-      return fail(res, "This request is not a pending open-shift claim.", 409);
-    }
-
-    const shift = await db.shift.findByPk(claim.requester_shift_id, {
-      transaction,
-      lock: transaction.LOCK.UPDATE,
-    });
-
-    if (!shift || !departmentIds.includes(Number(shift.department_id))) {
-      await transaction.rollback();
-      return fail(res, "You do not have permission to review this claim.", 403);
-    }
-
-    if (action === "approve") {
-      if (shift.assigned_user_id) {
-        await transaction.rollback();
-        return fail(res, "Shift is no longer open.", 409);
-      }
-
-      const claimantHasTimeOff = await hasApprovedTimeOffForDate(
-        claim.requester_user_id,
-        shift.shift_date,
-        transaction,
-      );
-      if (claimantHasTimeOff) {
-        await transaction.rollback();
-        return fail(res, "Cannot approve claim: worker has approved time-off on this date.", 409);
-      }
-
-      shift.assigned_user_id = claim.requester_user_id;
-      shift.updated_at = new Date();
-      await shift.save({ transaction });
-
-      await db.shiftAcknowledgement.create(
-        { shiftId: shift.shift_id, userId: claim.requester_user_id, acknowledged: false },
-        { transaction },
-      );
-
-      claim.status = "approved";
-    } else {
-      claim.status = "rejected";
-    }
-
-    claim.manager_notes = notes;
-    claim.reviewed_by = managerId;
-    claim.reviewed_at = new Date();
-    claim.updated_at = new Date();
-    await claim.save({ transaction });
-
-    await transaction.commit();
-    return ok(res, claim, `Open shift claim ${claim.status}.`);
-  } catch (error) {
-    await transaction.rollback();
-    logger.error(`[ManagerController] reviewManagerOpenShiftClaim error: ${error.message}`);
-    return fail(res, "Error reviewing open shift claim.", 500);
   }
 };
