@@ -718,19 +718,29 @@ export const listShifts = async (req, res) => {
     const { department_id, assigned_user_id, is_published, shift_date, shift_status } = req.query;
     const where = {};
 
-    // If no department_id specified and user is a student, use their active department
-    if (!department_id && req.auth && req.auth.userId) {
+    // Detect "my own shifts" requests: when the caller is asking for shifts
+    // assigned to themselves, skip the active-department auto-filter. Managers
+    // (and any user without an active department row) still see their own
+    // shifts and can clock in on them.
+    const requestingOwnShifts =
+      assigned_user_id != null &&
+      req.auth?.userId != null &&
+      String(assigned_user_id) === String(req.auth.userId);
+
+    if (department_id) {
+      where.department_id = department_id;
+    } else if (!requestingOwnShifts && req.auth && req.auth.userId) {
+      // If no department_id specified and the user is asking for other people's
+      // shifts (or all shifts), narrow to their active department. This keeps
+      // cross-department separation intact for manager/student browse flows.
       const { getStudentActiveDepartment } = await import('./user_department.controller.js');
       const activeDepartment = await getStudentActiveDepartment(req.auth.userId);
-      
+
       if (activeDepartment) {
         where.department_id = activeDepartment.department_id;
-        console.log(`Auto-filtering shifts by student's active department: ${activeDepartment.department_id}`);
       }
-    } else {
-      if (department_id) where.department_id = department_id;
     }
-    
+
     if (assigned_user_id) where.assigned_user_id = assigned_user_id;
     if (is_published !== undefined) where.is_published = is_published === "true";
     if (shift_date) where.shift_date = shift_date;
