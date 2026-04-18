@@ -59,6 +59,9 @@ const withShiftStatus = (shift) => {
   };
 };
 
+const intervalsOverlap = (startA, endA, startB, endB) =>
+  startA < endB && startB < endA;
+
 const dateFromIso = (isoDate) => new Date(`${isoDate}T00:00:00`);
 const isoFromDate = (date) => date.toISOString().slice(0, 10);
 const addDays = (date, days) => {
@@ -242,6 +245,48 @@ const validateAvailabilityCoverage = async (userId, shiftDate, startTime, endTim
   return { valid: true };
 };
 
+const validateNoUnavailableConflicts = async (userId, shiftDate, startTime, endTime) => {
+  if (!shiftDate) {
+    return { valid: true };
+  }
+
+  const dayOfWeek = getDayOfWeekFromDate(shiftDate);
+  const shiftStart = toMinutes(startTime);
+  const shiftEnd = toMinutes(endTime);
+
+  const blockedRecords = await Availability.findAll({
+    where: {
+      userId,
+      availabilityType: {
+        [Op.in]: ["unavailable", "time_off"],
+      },
+      requestStatus: {
+        [Op.in]: ["approved", "pending"],
+      },
+      [Op.or]: [
+        { specificDate: shiftDate },
+        { dayOfWeek, isRecurring: true },
+      ],
+    },
+  });
+
+  const hasConflict = blockedRecords.some((availability) => {
+    const blockedStart = toMinutes(availability.startTime);
+    const blockedEnd = toMinutes(availability.endTime);
+    return intervalsOverlap(shiftStart, shiftEnd, blockedStart, blockedEnd);
+  });
+
+  if (hasConflict) {
+    return {
+      valid: false,
+      message: "Assigned user is unavailable during part of this shift window.",
+      conflictType: "availability_conflict",
+    };
+  }
+
+  return { valid: true };
+};
+
 const validateApprovedTimeOffCoverage = async (userId, shiftDate) => {
   if (!shiftDate) return { valid: true };
 
@@ -294,6 +339,16 @@ const validateAssignmentEligibility = async (
     return timeOffValidation;
   }
 
+  const unavailabilityValidation = await validateNoUnavailableConflicts(
+    assignedUserId,
+    shiftDate,
+    startTime,
+    endTime,
+  );
+  if (!unavailabilityValidation.valid) {
+    return unavailabilityValidation;
+  }
+
   return validateAvailabilityCoverage(
     assignedUserId,
     shiftDate,
@@ -301,9 +356,6 @@ const validateAssignmentEligibility = async (
     endTime,
   );
 };
-
-const isAvailabilityConflict = (validationResult) =>
-  !validationResult?.valid && validationResult?.conflictType === "availability_conflict";
 
 /**
  * Thin wrapper that routes through the centralised notification service.
@@ -597,7 +649,6 @@ export const validateBufferTime = async (departmentId, shiftDate, startTime, end
 export const createShift = async (req, res) => {
   try {
     const actorUserId = req.auth?.userId || req.body.created_by;
-    let assignmentWarningMessage = null;
 
     // Validate request
     if (!req.body.department_id || !req.body.position_id || !req.body.start_time || !req.body.end_time || !actorUserId) {
@@ -623,15 +674,11 @@ export const createShift = async (req, res) => {
       );
 
       if (!assignmentValidation.valid) {
-        if (isAvailabilityConflict(assignmentValidation)) {
-          assignmentWarningMessage = assignmentValidation.message;
-        } else {
         return res.status(409).send({
           success: false,
           message: assignmentValidation.message,
           conflictType: assignmentValidation.conflictType,
         });
-        }
       }
     }
 
@@ -698,13 +745,7 @@ export const createShift = async (req, res) => {
       },
     );
 
-    const payload = withShiftStatus(shiftWithAssociations);
-    if (assignmentWarningMessage) {
-      payload.warning_message = assignmentWarningMessage;
-      payload.warning_type = "availability_conflict";
-    }
-
-    res.status(201).send(payload);
+    res.status(201).send(withShiftStatus(shiftWithAssociations));
   } catch (err) {
     res.status(500).send({
       message: err.message || "Some error occurred while creating the Shift.",
@@ -838,7 +879,6 @@ export const updateShift = async (req, res) => {
   const id = req.params.id;
 
   try {
-    let assignmentWarningMessage = null;
     const actorUserId = req.auth?.userId || req.body.created_by;
     // Get the existing shift first (with associations so we can build change diffs)
     const existingShift = await Shift.findByPk(id, { include: shiftIncludes });
@@ -868,15 +908,11 @@ export const updateShift = async (req, res) => {
       );
 
       if (!assignmentValidation.valid) {
-        if (isAvailabilityConflict(assignmentValidation)) {
-          assignmentWarningMessage = assignmentValidation.message;
-        } else {
         return res.status(409).send({
           success: false,
           message: assignmentValidation.message,
           conflictType: assignmentValidation.conflictType,
         });
-        }
       }
     }
 
@@ -989,13 +1025,7 @@ export const updateShift = async (req, res) => {
         },
       );
 
-      const payload = withShiftStatus(updatedShift);
-      if (assignmentWarningMessage) {
-        payload.warning_message = assignmentWarningMessage;
-        payload.warning_type = "availability_conflict";
-      }
-
-      res.send(payload);
+      res.send(withShiftStatus(updatedShift));
     } else {
       res.status(404).send({
         message: `Cannot update Shift with id=${id}. Shift was not found or req.body is empty!`,
@@ -1004,6 +1034,119 @@ export const updateShift = async (req, res) => {
   } catch (err) {
     res.status(500).send({
       message: `Error updating Shift with id=${id}: ${err.message}`,
+    });
+  }
+};
+
+// List workers who can be assigned for a specific shift window.
+export const listAssignableWorkers = async (req, res) => {
+  try {
+    const managerUserId = Number(req.auth?.userId || 0);
+    const departmentId = Number(req.query.department_id || 0);
+    const positionId = req.query.position_id ? Number(req.query.position_id) : null;
+    const shiftDate = req.query.shift_date;
+    const startTime = req.query.start_time;
+    const endTime = req.query.end_time;
+
+    if (!departmentId || !shiftDate || !startTime || !endTime) {
+      return res.status(400).send({
+        message: "Missing required query params: department_id, shift_date, start_time, end_time.",
+      });
+    }
+
+    const where = {
+      department_id: departmentId,
+      is_active: true,
+    };
+
+    if (positionId) {
+      where.position_id = positionId;
+    }
+
+    const memberships = await UserDepartment.findAll({
+      where,
+      include: [
+        {
+          model: db.user,
+          as: "user",
+          attributes: ["id", "fName", "lName", "email"],
+          required: true,
+        },
+        {
+          model: db.role,
+          as: "role",
+          attributes: ["role_name", "permission_level"],
+          required: false,
+        },
+        {
+          model: db.position,
+          as: "position",
+          attributes: ["position_id", "position_name"],
+          required: false,
+        },
+      ],
+      order: [
+        [{ model: db.user, as: "user" }, "fName", "ASC"],
+        [{ model: db.user, as: "user" }, "lName", "ASC"],
+      ],
+    });
+
+    const candidates = memberships.filter((membership) => {
+      if (!membership?.user) return false;
+      if (Number(membership.user_id) === managerUserId) return false;
+
+      const roleName = String(membership.role?.role_name || "").toLowerCase();
+      const permissionLevel = Number(membership.role?.permission_level ?? 0);
+      return roleName.includes("student") || permissionLevel < 50;
+    });
+
+    const checks = await Promise.all(
+      candidates.map(async (membership) => {
+        const user = membership.user;
+        const assignedUserId = Number(user.id);
+
+        const assignmentValidation = await validateAssignmentEligibility(
+          departmentId,
+          assignedUserId,
+          positionId || membership.position_id || null,
+          shiftDate,
+          startTime,
+          endTime,
+        );
+
+        if (!assignmentValidation.valid) {
+          return null;
+        }
+
+        const bufferValidation = await validateBufferTime(
+          departmentId,
+          shiftDate,
+          startTime,
+          endTime,
+          assignedUserId,
+        );
+
+        if (!bufferValidation.valid) {
+          return null;
+        }
+
+        return {
+          id: assignedUserId,
+          userId: assignedUserId,
+          fName: user.fName,
+          lName: user.lName,
+          email: user.email,
+          position_id: membership.position_id || null,
+          position_name: membership.position?.position_name || null,
+        };
+      }),
+    );
+
+    const data = checks.filter(Boolean);
+    return res.send({ data });
+  } catch (err) {
+    return res.status(500).send({
+      message: err.message || "Failed to load assignable workers.",
     });
   }
 };
