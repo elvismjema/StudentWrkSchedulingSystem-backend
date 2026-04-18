@@ -264,7 +264,9 @@ const shiftIncludes = [
 export const getDashboard = async (req, res) => {
   try {
     const userId = req.auth.userId;
-    const today = new Date().toISOString().split("T")[0];
+    const now = new Date();
+    const today = now.toISOString().split("T")[0];
+    const currentTime = now.toTimeString().slice(0, 8); // HH:MM:SS for end_time comparison
     const { weekStart, weekEnd } = getCurrentWeekRange();
 
     // Fetch student's department memberships (needed for open-shifts filter)
@@ -341,22 +343,32 @@ export const getDashboard = async (req, res) => {
       // Open shifts: unassigned + needing cover — only from student's departments.
       // NOTE: we intentionally over-fetch here so the availability filter below
       // has a pool to draw from before we slice to the preview size.
+      // Exclude shifts that have already ended (today's shifts past their end_time).
       userDeptIds.length > 0
         ? Shift.findAll({
             where: {
               is_published: true,
-              shift_date: { [Op.gte]: today },
               department_id: { [Op.in]: userDeptIds },
-              [Op.or]: [
-                // Truly unassigned
+              [Op.and]: [
+                // Not expired: future date, or today-but-still-ahead
                 {
-                  assigned_user_id: null,
-                  [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+                  [Op.or]: [
+                    { shift_date: { [Op.gt]: today } },
+                    { shift_date: today, end_time: { [Op.gt]: currentTime } },
+                  ],
                 },
-                // Manager-approved cover shifts (shift is open for pickup, not the student's own shift)
+                // Pickable status
                 {
-                  trade_status: "approved_cover",
-                  assigned_user_id: { [Op.ne]: userId },
+                  [Op.or]: [
+                    {
+                      assigned_user_id: null,
+                      [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+                    },
+                    {
+                      trade_status: "approved_cover",
+                      assigned_user_id: { [Op.ne]: userId },
+                    },
+                  ],
                 },
               ],
             },
@@ -533,7 +545,12 @@ export const getMySchedule = async (req, res) => {
 export const getOpenShifts = async (req, res) => {
   try {
     const userId = req.auth.userId;
-    const today = new Date().toISOString().split("T")[0];
+    const now = new Date();
+    const today = now.toISOString().split("T")[0];
+    // HH:MM:SS — compared against shift.end_time so we hide shifts that
+    // have already finished today. Example: 6:00–7:30 AM shift is hidden
+    // after 7:30 AM the same day.
+    const currentTime = now.toTimeString().slice(0, 8);
     const { departmentId, startDate, endDate } = req.query;
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(Number(req.query.limit) || 25, 100);
@@ -562,30 +579,43 @@ export const getOpenShifts = async (req, res) => {
 
     // Two types of open shifts:
     // 1. Truly unassigned shifts (assigned_user_id is null)
-    // 2. Cover-approved shifts (trade_status = 'approved_cover'): the original
-    //    worker's ID stays in assigned_user_id — only trade_status signals that
-    //    the shift is now open for another student to pick up.
+    // 2. Cover-approved shifts (trade_status = 'approved_cover'): manager
+    //    approval also NULLs assigned_user_id so they match clause #1 too —
+    //    clause #2 is kept defensively in case a row drifts out of sync.
     //    'pending_cover' shifts are NOT shown — manager must approve first.
-    const dateFilter = { [Op.gte]: startDate || today };
-    if (endDate) dateFilter[Op.lte] = endDate;
-
-    const where = {
-      is_published: true,
-      shift_date: dateFilter,
-      department_id: { [Op.in]: targetDeptIds },
+    //
+    // Shifts that have already ended (whole past dates, or today's shifts
+    // whose end_time is in the past) are filtered out so the list only
+    // contains shifts a student can actually still work.
+    const earliestDate = startDate && startDate > today ? startDate : today;
+    const notExpiredClause = {
       [Op.or]: [
-        // Truly unassigned
+        { shift_date: { [Op.gt]: today } }, // any future date is fine
+        { shift_date: today, end_time: { [Op.gt]: currentTime } }, // today, not yet ended
+      ],
+    };
+    const dateRangeClause = endDate
+      ? { shift_date: { [Op.between]: [earliestDate, endDate] } }
+      : { shift_date: { [Op.gte]: earliestDate } };
+    const statusClause = {
+      [Op.or]: [
+        // Truly unassigned (also captures cover-approved whose assigned_user_id was nulled)
         {
           assigned_user_id: null,
           trade_status: { [Op.notIn]: ["cancelled", "changed"] },
         },
-        // Original worker requested cover; manager approved — open for pickup
-        // but the calling student cannot pick up their own shift
+        // Defensive: approved_cover rows where assigned_user_id is still set
         {
           trade_status: "approved_cover",
           assigned_user_id: { [Op.ne]: userId },
         },
       ],
+    };
+
+    const where = {
+      is_published: true,
+      department_id: { [Op.in]: targetDeptIds },
+      [Op.and]: [dateRangeClause, notExpiredClause, statusClause],
     };
 
     // Fetch the whole eligible pool, then drop shifts that conflict with the
@@ -692,54 +722,53 @@ export const claimOpenShift = async (req, res) => {
 
     let claimRequest;
 
-    if (isCoverApproved) {
-      // ── COVER-APPROVED flow (Stage 2) ────────────────────────────────────
-      // The shift was posted via find-cover and manager approved it as open.
-      // Volunteer (userId) is now requesting to pick it up.
-      // Reuse the existing SwapRequest record (created in Stage 1).
+    // Look up an existing Stage-1 cover request (created when the original
+    // worker posted for cover and the manager approved it). If one exists,
+    // we reuse it. If not — either this is a truly unassigned shift, or the
+    // cover-approved shift has an orphaned record state — we fall through
+    // to creating a fresh pickup request. We should NEVER 500 here just
+    // because `trade_status='approved_cover'` without a matching swap row;
+    // that would block the student from picking up an otherwise open shift.
+    const existingCoverReq = isCoverApproved
+      ? await ShiftSwapRequest.findOne({
+          where: {
+            requester_shift_id: shiftId,
+            type: "find_cover",
+            status: "accepted",
+          },
+          transaction,
+          lock: transaction.LOCK.UPDATE,
+        })
+      : null;
 
-      const coverSwapReq = await ShiftSwapRequest.findOne({
-        where: {
-          requester_shift_id: shiftId,
-          type: "find_cover",
-          status: "accepted",
-        },
-        transaction,
-        lock: transaction.LOCK.UPDATE,
-      });
-
-      if (!coverSwapReq) {
-        await transaction.rollback();
-        return fail(res, "Cover request record not found. Please try again.", 500);
-      }
-
-      // Prevent duplicate: same volunteer already has a pending pickup for this shift
-      if (coverSwapReq.respondent_user_id === userId) {
+    if (existingCoverReq) {
+      // ── COVER-APPROVED (Stage 2): reuse the Stage-1 record ───────────────
+      // Prevent duplicate: same volunteer already responded to this posting
+      if (existingCoverReq.respondent_user_id === userId) {
         await transaction.rollback();
         return fail(res, "You already have a pending pickup request for this shift.", 409);
       }
 
-      coverSwapReq.respondent_user_id = userId;
-      coverSwapReq.respondent_notes = req.body?.notes || null;
-      coverSwapReq.status = "manager_pending";
-      coverSwapReq.updated_at = new Date();
-      await coverSwapReq.save({ transaction });
+      existingCoverReq.respondent_user_id = userId;
+      existingCoverReq.respondent_notes = req.body?.notes || null;
+      existingCoverReq.status = "manager_pending";
+      existingCoverReq.updated_at = new Date();
+      await existingCoverReq.save({ transaction });
 
-      claimRequest = coverSwapReq;
+      claimRequest = existingCoverReq;
 
       await transaction.commit();
 
-      // Notify the original student that someone wants to take their shift
+      // Notify the original worker that someone wants to take their shift
       sendNotification(
-        coverSwapReq.requester_user_id,
+        existingCoverReq.requester_user_id,
         "Someone Wants to Cover Your Shift",
         `A student has requested to pick up your shift on ${shift.shift_date}. Waiting for manager approval.`,
         { type: "shift_change", link: "/student/schedule" }
       ).catch((err) => logger.error(`Notification error: ${err.message}`));
-
     } else {
-      // ── TRULY UNASSIGNED flow ────────────────────────────────────────────
-      // Original open shift (no assigned_user_id). Student claims it directly.
+      // ── TRULY UNASSIGNED (or orphaned cover-approved): create a new ──────
+      // pickup request with the picker as both requester and respondent.
 
       // Prevent duplicate pending claims from the same user for the same shift.
       const existingClaim = await ShiftSwapRequest.findOne({
@@ -763,7 +792,9 @@ export const claimOpenShift = async (req, res) => {
           respondent_user_id: userId,
           type: "find_cover",
           status: "manager_pending",
-          requester_notes: req.body?.notes || "Open shift claim request",
+          requester_notes:
+            req.body?.notes ||
+            (isCoverApproved ? "Pickup request for open shift" : "Open shift claim request"),
           created_at: new Date(),
           updated_at: new Date(),
         },
