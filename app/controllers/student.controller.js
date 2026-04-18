@@ -562,8 +562,10 @@ export const getOpenShifts = async (req, res) => {
 
     // Two types of open shifts:
     // 1. Truly unassigned shifts (assigned_user_id is null)
-    // 2. Shifts where cover was approved by manager (trade_status = 'approved_cover')
-    //    NOTE: 'pending_cover' shifts are NOT shown — manager must approve first.
+    // 2. Cover-approved shifts (trade_status = 'approved_cover'): the original
+    //    worker's ID stays in assigned_user_id — only trade_status signals that
+    //    the shift is now open for another student to pick up.
+    //    'pending_cover' shifts are NOT shown — manager must approve first.
     const dateFilter = { [Op.gte]: startDate || today };
     if (endDate) dateFilter[Op.lte] = endDate;
 
@@ -571,9 +573,19 @@ export const getOpenShifts = async (req, res) => {
       is_published: true,
       shift_date: dateFilter,
       department_id: { [Op.in]: targetDeptIds },
-      trade_status: { [Op.notIn]: ["cancelled", "changed"] },
-      // Show unassigned shifts AND cover-approved shifts (manager greenlit; assigned_user_id cleared to null)
-      assigned_user_id: null,
+      [Op.or]: [
+        // Truly unassigned
+        {
+          assigned_user_id: null,
+          trade_status: { [Op.notIn]: ["cancelled", "changed"] },
+        },
+        // Original worker requested cover; manager approved — open for pickup
+        // but the calling student cannot pick up their own shift
+        {
+          trade_status: "approved_cover",
+          assigned_user_id: { [Op.ne]: userId },
+        },
+      ],
     };
 
     // Fetch the whole eligible pool, then drop shifts that conflict with the
