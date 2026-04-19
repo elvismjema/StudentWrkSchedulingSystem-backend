@@ -280,6 +280,7 @@ export const getDashboard = async (req, res) => {
     const [
       todayShifts,
       weekShifts,
+      upcomingShifts,
       openClockRecord,
       unreadCount,
       pendingAcknowledgements,
@@ -311,6 +312,26 @@ export const getDashboard = async (req, res) => {
         },
         include: shiftIncludes,
         order: [["shift_date", "ASC"], ["start_time", "ASC"]],
+      }),
+
+      // Upcoming shifts beyond this week. The dashboard's 'Up Next' hero +
+      // secondary stack needs to surface accepted shifts that fall past the
+      // current calendar week (weekShifts is Mon–Sun scoped). We cap at 10 so
+      // the dashboard stays a dashboard — the full list lives in Schedule.
+      Shift.findAll({
+        where: {
+          assigned_user_id: userId,
+          is_published: true,
+          // Today onward — today's shifts that haven't ended yet are already
+          // covered by todayShifts; any same-day row returned here will be
+          // deduped client-side by id.
+          shift_date: { [Op.gte]: today },
+          // Same exclusion rules as weekShifts — keep semantics consistent.
+          [Op.or]: [{ trade_status: null }, { trade_status: { [Op.notIn]: ["cancelled", "approved_cover"] } }],
+        },
+        include: shiftIncludes,
+        order: [["shift_date", "ASC"], ["start_time", "ASC"]],
+        limit: 10,
       }),
 
       // Current clock-in status (includes open break record to derive onBreak)
@@ -396,6 +417,13 @@ export const getDashboard = async (req, res) => {
         (s) => s.shift_date > today || (s.shift_date === today && toMinutes(s.end_time) > nowMinutes)
       ) || null;
     }
+    // Extend the fallback into upcomingShifts so users whose next accepted
+    // shift sits beyond the current week still see it on the dashboard.
+    if (!nextShift && upcomingShifts.length > 0) {
+      nextShift = upcomingShifts.find(
+        (s) => s.shift_date > today || (s.shift_date === today && toMinutes(s.end_time) > nowMinutes)
+      ) || null;
+    }
 
     // Compute weekly hours estimate
     const weeklyMinutes = weekShifts.reduce((sum, s) => {
@@ -413,6 +441,7 @@ export const getDashboard = async (req, res) => {
       nextShift,
       todayShifts,
       weekShifts,
+      upcomingShifts,
       scheduledDays,
       estimatedWeeklyHours: +(weeklyMinutes / 60).toFixed(1),
       clockStatus: openClockRecord
