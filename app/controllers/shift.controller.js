@@ -26,6 +26,7 @@ const shiftIncludes = [
   { model: db.scheduleTemplate, as: "template" },
   { model: db.user, as: "assignedUser" },
   { model: db.user, as: "creator" },
+  { model: db.shiftAcknowledgement, as: "acknowledgements" },
 ];
 
 const toMinutes = (timeValue) => {
