@@ -1091,7 +1091,7 @@ export const listAssignableWorkers = async (req, res) => {
         {
           model: db.position,
           as: "position",
-          attributes: ["position_id", "position_name"],
+          attributes: ["position_id", "position_name", "color"],
           required: false,
         },
       ],
