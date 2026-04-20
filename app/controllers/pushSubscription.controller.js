@@ -1,5 +1,6 @@
 import db from "../models/index.js";
 import logger from "../config/logger.js";
+import { sendWebPushNotification } from "../services/notificationService.js";
 
 const PushSubscription = db.pushSubscription;
 
@@ -71,5 +72,54 @@ export const deleteSubscription = async (req, res) => {
   } catch (err) {
     logger.error(`[PushSubscription] Failed to delete subscription: ${err.message}`);
     res.status(500).json({ message: "Failed to remove subscription" });
+  }
+};
+
+/**
+ * POST /push-subscriptions/me/test
+ * Send a canned test push to every device the authenticated user has
+ * subscribed. Self-serve only — uses req.auth.userId, never a path/body id —
+ * so there is no authorization surface to abuse.
+ *
+ * Returns a delivery summary so the UI can surface the real outcome:
+ *   { message, devicesTargeted, sent, failed, pruned, skippedReason? }
+ *
+ * skippedReason values the UI cares about:
+ *   - "no-subscriptions"     → user hasn't enabled push on any device
+ *   - "vapid-not-configured" → server misconfig, tell an admin
+ *   - "error:<message>"      → unexpected backend error
+ */
+export const sendTestPush = async (req, res) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+    const summary = await sendWebPushNotification(
+      userId,
+      "Test notification",
+      "If you see this, push notifications are working on this device.",
+      {
+        // Intentionally no 'type' — the preference opt-out map would block
+        // the test if the user turned off that category. A test should
+        // always attempt delivery.
+        link: "/student/notifications",
+        priority: "normal",
+      },
+    );
+
+    return res.json({
+      message:
+        summary.sent > 0
+          ? "Test push sent."
+          : summary.skippedReason === "no-subscriptions"
+            ? "No devices subscribed yet. Enable push on this device first."
+            : summary.skippedReason === "vapid-not-configured"
+              ? "Push notifications are not configured on this server."
+              : "Test push attempted but no deliveries succeeded.",
+      ...summary,
+    });
+  } catch (err) {
+    logger.error(`[PushSubscription] Test push failed: ${err.message}`);
+    return res.status(500).json({ message: "Failed to send test push" });
   }
 };

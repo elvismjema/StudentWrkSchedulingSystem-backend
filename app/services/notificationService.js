@@ -132,20 +132,30 @@ const getWebpushClient = async () => {
   return webpushClientPromise;
 };
 
+/**
+ * Send a Web Push notification to every device the user has subscribed.
+ *
+ * Returns a delivery summary so callers (e.g. the self-serve test endpoint)
+ * can report exactly what happened. Still safe to await-and-ignore from the
+ * unified dispatcher — existing call sites don't need to change.
+ *
+ * @returns {Promise<{ sent: number, failed: number, pruned: number, skippedReason?: string, devicesTargeted: number }>}
+ */
 export const sendWebPushNotification = async (userId, title, message, options = {}) => {
-  if (!userId) return;
+  const summary = { sent: 0, failed: 0, pruned: 0, devicesTargeted: 0 };
+  if (!userId) return { ...summary, skippedReason: "no-user-id" };
 
   const webpush = await getWebpushClient();
   if (!webpush) {
     logger.debug("[NotificationService][PUSH] VAPID keys not configured; skipping push delivery");
-    return;
+    return { ...summary, skippedReason: "vapid-not-configured" };
   }
 
   try {
     const PushSubscription = db.pushSubscription;
     if (!PushSubscription) {
       logger.debug("[NotificationService][PUSH] PushSubscription model not registered");
-      return;
+      return { ...summary, skippedReason: "model-not-registered" };
     }
 
     const [user, subscriptions] = await Promise.all([
@@ -153,7 +163,10 @@ export const sendWebPushNotification = async (userId, title, message, options = 
       PushSubscription.findAll({ where: { user_id: userId } }),
     ]);
 
-    if (!subscriptions || subscriptions.length === 0) return;
+    if (!subscriptions || subscriptions.length === 0) {
+      return { ...summary, skippedReason: "no-subscriptions" };
+    }
+    summary.devicesTargeted = subscriptions.length;
 
     // Check per-preference opt-out
     const prefKey = options.type ? NOTIFICATION_TYPE_TO_PREF_KEY[options.type] : null;
@@ -166,7 +179,7 @@ export const sendWebPushNotification = async (userId, title, message, options = 
       }
       if (prefs[prefKey] === false) {
         logger.debug(`[NotificationService][PUSH] User ${userId} opted out of '${prefKey}' push notifications`);
-        return;
+        return { ...summary, skippedReason: `opted-out:${prefKey}` };
       }
     }
 
@@ -186,10 +199,13 @@ export const sendWebPushNotification = async (userId, title, message, options = 
             { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
             payload,
           );
+          summary.sent += 1;
         } catch (err) {
           if (err.statusCode === 410 || err.statusCode === 404) {
             staleIds.push(sub.id);
+            summary.pruned += 1;
           } else {
+            summary.failed += 1;
             logger.warn(`[NotificationService][PUSH] Failed to send push to user ${userId}: ${err.message}`);
           }
         }
@@ -202,8 +218,11 @@ export const sendWebPushNotification = async (userId, title, message, options = 
     if (staleIds.length > 0) {
       logger.info(`[NotificationService][PUSH] Removed ${staleIds.length} stale subscriptions for user ${userId}`);
     }
+
+    return summary;
   } catch (err) {
     logger.error(`[NotificationService] Web push delivery error for user ${userId}: ${err.message}`);
+    return { ...summary, skippedReason: `error:${err.message}` };
   }
 };
 
