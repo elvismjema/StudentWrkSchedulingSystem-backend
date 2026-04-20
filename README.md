@@ -1,101 +1,96 @@
-# Tutorial Backend with Node
+# SWS — Student Work Scheduling System (Backend)
 
-This application allows users to create and maintain a list of tutorials that can have multiple lessons within. Please visit https://github.com/OC-ComputerScience/tutorial-frontend-vue2 for the Vue 2 frontend repository or https://github.com/OC-ComputerScience/tutorial-frontend-vue3 for the Vue 3 frontend repository.
+SWS is the Student Work Scheduling System for Oklahoma Christian University. This service provides the REST API that powers the SWS frontend: managers create and assign shifts, student workers clock in and out, submit availability, request shift swaps and time off, and receive notifications; the system tracks clock records, break records, and time discrepancies, and exposes payroll-ready reports. Three roles are supported — **student**, **manager**, and **admin** — with JWT-based auth backed by Google OAuth.
 
-#### Please note:
+## Stack
 
-- You will need to create a database and be able to run it locally.
-- This project utilizes **Google Authentication** to allow users to log in.
-- You will need to provide a **Client ID from Google** for this project to run locally.
+- **Node.js ≥ 18** — runtime
+- **Express 4** — HTTP framework
+- **Sequelize 6** — ORM (MySQL / mysql2)
+- **MySQL** — relational database
+- **JWT** (jsonwebtoken) + **Google OAuth** (googleapis) — authentication
+- **Jest 29** + **Supertest** — unit and integration testing
+- **Winston** + **Morgan** — structured logging (see `LOGGING.md`)
+- **Nodemailer** + **Twilio** — email and SMS notifications
+- **Multer** — file uploads (qualification evidence)
+- **Sequelize CLI migrations** — schema versioning under `migrations/`
 
-## Project Setup
+## Getting Started
 
-1. Clone the project into your **XAMPP/xamppfiles/htdocs** directory.
+```sh
+# 1. Clone the repo
+git clone https://github.com/OC-ComputerScience/sws-backend.git
+cd sws-backend
 
-```
-git clone https://github.com/OC-ComputerScience/tutorial-backend.git
-```
-
-2. Install the project.
-
-```
+# 2. Install dependencies
 npm install
+
+# 3. Configure environment
+cp .env.example .env   # then fill in your local values
+# Required variables include database credentials, Google OAuth client ID/secret,
+# JWT secret, and optional Twilio/Nodemailer settings.
+# See CONTRIBUTING.md and .env.example for the full variable list.
+
+# 4. Install git hooks (required once per clone)
+bash scripts/setup-hooks.sh
+
+# 5. Start the server
+npm start
 ```
 
-3. Configure **Apache** to point to **Node** for API requests.
+To run tests:
 
-   - We recommend using XAMPP to serve this project.
-   - In XAMPP, find the **Edit/Configure** button for **Apache**.
-   - Edit the **conf** file, labeled **httpd.conf**.
-   - It may warn you when opening it but open it anyway.
-   - Add the following line as the **last line**:
-
-   ```
-   ProxyPass /tutorial http://localhost:3100/tutorial
-   ```
-
-   - Find the following line and remove the **#** at the front of the line.
-
-   ```
-   LoadModule proxy_http_module modules/mod_proxy_http.so
-   LoadModule proxy_http2_module modules/mod_proxy_http2.so
-   ```
-
-   - Save the file.
-   - **Restart Apache** and exit XAMPP.
-
-4. Make a local **tutorial** database.
-
-   - Create a schema/database.
-   - The sequelize in this project will make all the tables for you.
-
-5. Make sure you have a project registered with the **Google Developer console**.
-
-   - https://console.developers.google.com/
-   - Enable **Google+ API** and **Google Analytics API**.
-   - Enable an **OAuth consent screen**.
-   - Create an **OAuth client ID**.
-   - Save your **Client ID** and **Client Secret** in a safe place.
-
-6. Add a local **.env** file and make sure the **client ID** and **client secret** are the values you got from Google. Also make sure that the **database** variables are correct.
-
-   - CLIENT_ID = '**your-google-client-id**'
-   - CLIENT_SECRET = '**your-google-client-secret**'
-   - DB_HOST = 'localhost'
-   - DB_PW = '**your-local-database-password**'
-   - DB_USER = '**your-local-database-username**' (usually "root")
-   - DB_NAME = '**your-local-database-name**'
-
-7. Compile and run the project locally.
-
-```
-npm run start
+```sh
+npm test                    # full Jest suite
+npm run test:integration    # integration tests only
 ```
 
-8. Test your project.
-   - Note that to test your backend, you don't need anything to be running.
+## Branch & PR Workflow
+
+All work happens on feature branches cut from `dev` (`feat/short-description`, `fix/short-description`, `docs/short-description`, etc.). Direct pushes to `dev` and `main` are blocked by the pre-push hook installed via `scripts/setup-hooks.sh`; GitHub branch protection enforces the same rule remotely. Open pull requests against `dev`; stable releases are merged from `dev` into `main`. Commit messages follow conventional-commits style (`type: description`). The commit-msg hook rejects any commit that contains AI attribution lines (`Co-Authored-By: Claude`, `Generated with ChatGPT`, etc.) — see `AGENTS.md` for the full policy.
+
+## Directory Overview
 
 ```
-npm run test
+app/
+├── controllers/       # Request handlers (one per resource)
+├── routes/            # Express routers — one file per API area (see below)
+├── models/            # Sequelize model definitions and associations
+├── middleware/        # Auth, role guards, error handling
+├── authorization/     # Permission helpers
+├── services/          # Business-logic services (notifications, sync, etc.)
+└── config/            # DB config, Sequelize instance, Winston logger
+
+migrations/            # Sequelize CLI migrations (timestamp-prefixed)
+__tests__/             # Jest unit and integration tests
+scripts/               # setup-hooks.sh, schema sync helpers
+server.js              # App entry point
 ```
 
-## Logging
+Key API areas (all under `/api`):
 
-This project uses **Winston** for application logging and **Morgan** for HTTP request logging.
+| Route prefix | Description |
+|---|---|
+| `/auth` | Google OAuth sign-in, token refresh |
+| `/users`, `/employees` | User and employee management |
+| `/shifts`, `/schedule-templates` | Shift CRUD and schedule templates |
+| `/clock-records`, `/break-records` | Clock-in/out and break tracking |
+| `/availabilities` | Student availability submission and approval |
+| `/student/*` | Student dashboard aggregates (upcoming shifts, swap board, time-off) |
+| `/notifications` | In-app notifications |
+| `/time_discrepancies`, `/timecard-approvals` | Payroll discrepancy review and approvals |
+| `/reports` | Payroll-ready time reports |
+| `/departments`, `/positions`, `/roles` | Org-structure management |
+| `/qualifications`, `/position-qualifications` | Position requirement tracking |
+| `/manager`, `/admin` | Manager and admin aggregated endpoints |
 
-- Logs are written to `logs/error.log` (errors only) and `logs/all.log` (all levels)
-- Console output is colored for better readability in development
-- Log levels: error, warn, info, http, debug
+## Related
 
-For detailed logging documentation, see [LOGGING.md](LOGGING.md).
+- **Frontend:** [sws-frontend](https://github.com/OC-ComputerScience/sws-frontend)
+- **Contributor guide:** [CONTRIBUTING.md](CONTRIBUTING.md)
+- **AI agent policy:** [AGENTS.md](AGENTS.md)
+- **Logging:** [LOGGING.md](LOGGING.md)
 
-### Using the Logger
+## License
 
-```javascript
-import logger from "./app/config/logger.js";
-
-logger.info("Information message");
-logger.error("Error message");
-logger.warn("Warning message");
-logger.debug("Debug message");
-```
+ISC

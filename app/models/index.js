@@ -24,6 +24,9 @@ import ShiftAcknowledgement from "./shiftAcknowledgement.model.js";
 import ConflictAlert from "./conflictAlert.model.js";
 import ShiftTask from "./shiftTask.model.js";
 import DepartmentHours from "./department_hours.model.js";
+import TaskList from "./taskList.model.js";
+import TaskListItem from "./taskListItem.model.js";
+import ShiftTaskCompletion from "./shiftTaskCompletion.model.js";
 import Qualification from "./qualification.model.js";
 import UserQualification from "./user_qualification.model.js";
 import PositionQualification from "./positionQualification.model.js";
@@ -35,6 +38,7 @@ import ShiftSwapRequest from "./shift_swap_request.model.js";
 import TimeOffRequest from "./time_off_request.model.js";
 import BreakRecord from "./break_record.model.js";
 import TimecardApproval from "./timecard_approval.model.js";
+import SystemSetting from "./system_setting.model.js";
 
 
 const db = {};
@@ -62,6 +66,9 @@ db.shiftAcknowledgement = ShiftAcknowledgement;
 db.conflictAlert = ConflictAlert;
 db.shiftTask = ShiftTask;
 db.departmentHours = DepartmentHours;
+db.taskList = TaskList;
+db.taskListItem = TaskListItem;
+db.shiftTaskCompletion = ShiftTaskCompletion;
 db.qualification = Qualification;
 db.userQualification = UserQualification;
 db.positionQualification = PositionQualification;
@@ -73,6 +80,7 @@ db.shiftSwapRequest = ShiftSwapRequest;
 db.timeOffRequest = TimeOffRequest;
 db.breakRecord = BreakRecord;
 db.timecardApproval = TimecardApproval;
+db.systemSetting = SystemSetting;
 
 
 // foreign key for session
@@ -747,5 +755,28 @@ db.user.hasMany(db.breakRecord, {
   foreignKey: "user_id",
   as: "breakRecords",
 });
+
+// ── TaskList associations ─────────────────────────────────────────────────────
+db.department.hasMany(db.taskList, { foreignKey: "department_id", as: "taskLists", onDelete: "CASCADE" });
+db.taskList.belongsTo(db.department, { foreignKey: "department_id", as: "department" });
+db.user.hasMany(db.taskList, { foreignKey: "created_by", as: "createdTaskLists" });
+db.taskList.belongsTo(db.user, { foreignKey: "created_by", as: "creator" });
+
+db.taskList.hasMany(db.taskListItem, { foreignKey: "task_list_id", as: "items", onDelete: "CASCADE" });
+db.taskListItem.belongsTo(db.taskList, { foreignKey: "task_list_id", as: "taskList" });
+
+// Shift belongs to a TaskList template (nullable)
+db.shift.belongsTo(db.taskList, { foreignKey: "task_list_id", as: "taskList" });
+db.taskList.hasMany(db.shift, { foreignKey: "task_list_id", as: "shifts" });
+
+// ── ShiftTaskCompletion associations ──────────────────────────────────────────
+db.shift.hasMany(db.shiftTaskCompletion, { foreignKey: "shift_id", as: "taskCompletions", onDelete: "CASCADE" });
+db.shiftTaskCompletion.belongsTo(db.shift, { foreignKey: "shift_id", as: "shift" });
+
+db.taskListItem.hasMany(db.shiftTaskCompletion, { foreignKey: "task_list_item_id", as: "completions", onDelete: "CASCADE" });
+db.shiftTaskCompletion.belongsTo(db.taskListItem, { foreignKey: "task_list_item_id", as: "taskListItem" });
+
+db.user.hasMany(db.shiftTaskCompletion, { foreignKey: "completed_by", as: "taskCompletions" });
+db.shiftTaskCompletion.belongsTo(db.user, { foreignKey: "completed_by", as: "completedByUser" });
 
 export default db;

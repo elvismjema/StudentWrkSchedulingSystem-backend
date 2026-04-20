@@ -1,0 +1,8 @@
+'use strict';
+const path = require('path');
+
+module.exports = {
+  'config': path.resolve('config', 'sequelize-config.cjs'),
+  'migrations-path': path.resolve('migrations'),
+  'models-path': path.resolve('app', 'models'),
+};
