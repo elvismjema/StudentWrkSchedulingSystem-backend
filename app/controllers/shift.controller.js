@@ -27,6 +27,12 @@ const shiftIncludes = [
   { model: db.user, as: "assignedUser" },
   { model: db.user, as: "creator" },
   { model: db.shiftAcknowledgement, as: "acknowledgements" },
+  {
+    model: db.taskList,
+    as: "taskList",
+    required: false,
+    include: [{ model: db.taskListItem, as: "items" }],
+  },
 ];
 
 const toMinutes = (timeValue) => {
@@ -74,19 +80,21 @@ const addDays = (date, days) => {
 const syncWeeklyRecurringSeries = async (baseShift, actorUserId) => {
   if (!baseShift?.is_recurring || !baseShift?.shift_date || !baseShift?.recurrence_end_date) return;
 
+  const pattern = baseShift.recurrence_pattern || "weekly";
+  const step = pattern === "daily" ? 1 : 7;
   const recurrenceStart = baseShift.recurrence_start_date || baseShift.shift_date;
   const startDate = dateFromIso(baseShift.shift_date);
   const endDate = dateFromIso(baseShift.recurrence_end_date);
   if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate < startDate) return;
 
-  // Find existing weekly series rows that belong to this same recurrence group.
+  // Find existing series rows that belong to this same recurrence group.
   const existingFutureShifts = await Shift.findAll({
     where: {
       shift_id: { [Op.ne]: baseShift.shift_id },
       department_id: baseShift.department_id,
       created_by: baseShift.created_by,
       is_recurring: true,
-      recurrence_pattern: "weekly",
+      recurrence_pattern: pattern,
       recurrence_start_date: recurrenceStart,
       shift_date: { [Op.gte]: baseShift.shift_date },
     },
@@ -99,7 +107,7 @@ const syncWeeklyRecurringSeries = async (baseShift, actorUserId) => {
   );
 
   const wantedDates = new Set();
-  for (let cursor = addDays(startDate, 7); cursor <= endDate; cursor = addDays(cursor, 7)) {
+  for (let cursor = addDays(startDate, step); cursor <= endDate; cursor = addDays(cursor, step)) {
     const nextDate = isoFromDate(cursor);
     wantedDates.add(nextDate);
 
@@ -113,9 +121,10 @@ const syncWeeklyRecurringSeries = async (baseShift, actorUserId) => {
       trade_status: baseShift.trade_status || null,
       is_published: !!baseShift.is_published,
       is_recurring: true,
-      recurrence_pattern: "weekly",
+      recurrence_pattern: pattern,
       recurrence_start_date: recurrenceStart,
       recurrence_end_date: baseShift.recurrence_end_date,
+      task_list_id: baseShift.task_list_id || null,
       day_of_week: null,
       is_template: false,
       template_id: null,
@@ -152,7 +161,7 @@ const deleteFutureRecurringSeriesShifts = async (seriesSeedShift, cutoffShiftDat
     department_id: seriesSeedShift.department_id,
     created_by: seriesSeedShift.created_by,
     is_recurring: true,
-    recurrence_pattern: "weekly",
+    recurrence_pattern: seriesSeedShift.recurrence_pattern || "weekly",
     recurrence_start_date: seriesAnchorDate,
     shift_date: { [Op.gt]: effectiveCutoffDate },
   };
@@ -720,6 +729,7 @@ export const createShift = async (req, res) => {
       recurrence_pattern: req.body.recurrence_pattern,
       recurrence_start_date: req.body.recurrence_start_date,
       recurrence_end_date: req.body.recurrence_end_date,
+      task_list_id: req.body.task_list_id || null,
     };
 
     // Save Shift in the database
