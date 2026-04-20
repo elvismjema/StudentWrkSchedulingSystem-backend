@@ -269,12 +269,11 @@ export const getDashboard = async (req, res) => {
     const currentTime = now.toTimeString().slice(0, 8); // HH:MM:SS for end_time comparison
     const { weekStart, weekEnd } = getCurrentWeekRange();
 
-    // Fetch student's department memberships (needed for open-shifts filter)
-    const userDepts = await UserDepartment.findAll({
-      where: { user_id: userId, is_active: true },
-      attributes: ["department_id"],
-    });
-    const userDeptIds = userDepts.map((ud) => ud.department_id);
+    // Use the student's current department context for dashboard data.
+    const currentDepartmentId = await getCurrentActiveDepartmentId(userId);
+    const studentDepartmentWhere = currentDepartmentId
+      ? { department_id: currentDepartmentId }
+      : {};
 
     // Run independent queries concurrently
     const [
@@ -292,6 +291,7 @@ export const getDashboard = async (req, res) => {
       Shift.findAll({
         where: {
           assigned_user_id: userId,
+          ...studentDepartmentWhere,
           shift_date: today,
           is_published: true,
           // Exclude cancelled and approved_cover (cover approved = shift posted as open, no longer Michael's)
@@ -305,6 +305,7 @@ export const getDashboard = async (req, res) => {
       Shift.findAll({
         where: {
           assigned_user_id: userId,
+          ...studentDepartmentWhere,
           shift_date: { [Op.between]: [weekStart, weekEnd] },
           is_published: true,
           // Exclude cancelled and approved_cover (cover approved = shift posted as open, no longer Michael's)
@@ -501,9 +502,15 @@ export const getMySchedule = async (req, res) => {
       endDate = endDate || range.weekEnd;
     }
 
+    const currentDepartmentId = await getCurrentActiveDepartmentId(userId);
+    if (!currentDepartmentId) {
+      return ok(res, []);
+    }
+
     const shifts = await Shift.findAll({
       where: {
         assigned_user_id: userId,
+        department_id: currentDepartmentId,
         shift_date: { [Op.between]: [startDate, endDate] },
         is_published: true,
         // Exclude cancelled and approved_cover (cover approved = shift posted as open, no longer the student's responsibility)
@@ -585,21 +592,17 @@ export const getOpenShifts = async (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 25, 100);
     const offset = (page - 1) * limit;
 
-    // Only show shifts in departments the student belongs to
-    const userDepts = await UserDepartment.findAll({
-      where: { user_id: userId, is_active: true },
-      attributes: ["department_id"],
-    });
-    const deptIds = userDepts.map((ud) => ud.department_id);
-    if (deptIds.length === 0) {
+    // Only show shifts in the student's current department context.
+    const currentDepartmentId = await getCurrentActiveDepartmentId(userId);
+    if (!currentDepartmentId) {
       return ok(res, { count: 0, shifts: [], page, limit });
     }
 
-    // If departmentId filter is provided, verify the student is a member first
-    let targetDeptIds = deptIds;
+    // If departmentId filter is provided, verify it matches the current department first.
+    let targetDeptIds = [currentDepartmentId];
     if (departmentId) {
       const numDeptId = Number(departmentId);
-      if (!deptIds.includes(numDeptId)) {
+      if (numDeptId !== currentDepartmentId) {
         // Student is not a member of this department — return empty
         return ok(res, { count: 0, shifts: [], page, limit });
       }
