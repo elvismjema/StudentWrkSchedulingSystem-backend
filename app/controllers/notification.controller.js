@@ -207,6 +207,55 @@ export const deleteNotification = async (req, res) => {
   }
 };
 
+// Delete all Notifications visible to the current notification owner
+export const deleteAllNotifications = async (req, res) => {
+  try {
+    const requestedUserId = req.query.userId ? Number(req.query.userId) : null;
+    const authUserId = Number(req.auth?.userId);
+    const authEmail = req.auth?.email;
+    const authRole = await resolveHighestRoleForUser(authUserId, authEmail);
+
+    if (!authUserId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized! Invalid authenticated user.",
+      });
+    }
+
+    if (req.query.userId && !requestedUserId) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid userId.",
+      });
+    }
+
+    if (requestedUserId && requestedUserId !== authUserId && authRole !== "manager" && authRole !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden! You can only delete your own notifications.",
+      });
+    }
+
+    const userId = requestedUserId || authUserId;
+    const deletedCount = await Notification.destroy({
+      where: { userId },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Notifications cleared successfully",
+      data: { deletedCount },
+    });
+  } catch (error) {
+    console.error("Error clearing notifications:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error clearing notifications",
+      error: error.message
+    });
+  }
+};
+
 // Mark notification as read
 export const markAsRead = async (req, res) => {
   try {

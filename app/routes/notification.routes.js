@@ -10,6 +10,9 @@ router.post("/", [authenticate], notificationController.createNotification);
 // Retrieve all Notifications (with optional user filter)
 router.get("/", [authenticate], notificationController.getAllNotifications);
 
+// Delete all Notifications for the authenticated user (or optional authorized user filter)
+router.delete("/", [authenticate], notificationController.deleteAllNotifications);
+
 // Retrieve a single Notification by id
 router.get("/:id", [authenticate], notificationController.getNotificationById);
 
