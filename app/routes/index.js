@@ -30,6 +30,8 @@ import TagRoutes from "./tag.routes.js";
 
 import ReportRoutes from "./report.routes.js";
 import SystemSettingRoutes from "./system_setting.routes.js";
+import TaskListRoutes from "./taskList.routes.js";
+import ShiftTaskCompletionRoutes from "./shiftTaskCompletion.routes.js";
 
 // ── NEW: Student Dashboard Routes ────────────────────────────────────────────
 import StudentRoutes from "./student.routes.js";
@@ -68,6 +70,8 @@ router.use("/tags", TagRoutes);
 
 router.use("/reports", ReportRoutes);
 router.use("/system-settings", SystemSettingRoutes);
+router.use("/task-lists", TaskListRoutes);
+router.use("/shift-task-completions", ShiftTaskCompletionRoutes);
 
 // ── NEW: Student Dashboard ───────────────────────────────────────────────────
 router.use("/student", StudentRoutes);
