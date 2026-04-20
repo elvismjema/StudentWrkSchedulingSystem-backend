@@ -237,6 +237,101 @@ describe("shift assignment validation", () => {
     expect(serialized).toContain("isSystemManaged");
   });
 
+  // ---------------------------------------------------------------------
+  // Regression coverage for the 'pending unavailable' product-rule fix.
+  //
+  // Before the fix, validateNoUnavailableConflicts only blocked on rows
+  // with requestStatus = 'approved'. The availability controller creates
+  // student self-declared blocks with status 'pending' by default, so a
+  // student could mark themselves unavailable and a manager could still
+  // assign a shift over it. The filter is now 'not rejected or
+  // cancelled', which flips the default to block-on-pending while still
+  // honoring the approval workflow's explicit negative outcomes.
+  // ---------------------------------------------------------------------
+
+  test("blocks assignment during a student-declared 'pending' unavailable window", async () => {
+    mockShift.findByPk.mockResolvedValue(baselineShift());
+    mockAvailability.findAll
+      .mockResolvedValueOnce([]) // class check
+      .mockResolvedValueOnce([
+        {
+          userId: 42,
+          dayOfWeek: 1,
+          isRecurring: true,
+          startTime: "09:30:00",
+          endTime: "12:00:00",
+          availabilityType: "unavailable",
+          requestStatus: "pending", // ← not yet approved by a manager
+        },
+      ]);
+
+    const res = mockRes();
+    await updateShift(assignPayload(), res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    const payload = res.send.mock.calls[0][0];
+    expect(payload.conflictType).toBe("availability_conflict");
+    expect(payload.message).toMatch(/unavailable/i);
+  });
+
+  // Rejected / cancelled rows are excluded at the database layer by the
+  // where clause (requestStatus: { [Op.notIn]: ['rejected','cancelled'] }).
+  // We verify the filter shape directly further down
+  // ("unavailable query filters out 'rejected' and 'cancelled' at the
+  // DB layer") rather than simulating it in-memory here — the mock
+  // isn't a real Sequelize instance, so feeding it rejected rows would
+  // only exercise the JS-side overlap check, which doesn't know about
+  // status at all. The SQL-shape test is the authoritative guard.
+
+  test("does not over-block: non-overlapping pending unavailable row is ignored", async () => {
+    // Guard against the failure mode where the fix accidentally widened
+    // the conflict check so much that any same-day unavailable row
+    // blocks regardless of time. The shift is 10:00-11:00; the
+    // unavailable block is 14:00-16:00 — no overlap, must still allow.
+    mockShift.findByPk.mockResolvedValue(baselineShift());
+    mockAvailability.findAll
+      .mockResolvedValueOnce([]) // class check
+      .mockResolvedValueOnce([
+        {
+          userId: 42,
+          dayOfWeek: 1,
+          isRecurring: true,
+          startTime: "14:00:00",
+          endTime: "16:00:00",
+          availabilityType: "unavailable",
+          requestStatus: "pending",
+        },
+      ]);
+
+    const res = mockRes();
+    await updateShift(assignPayload(), res);
+
+    expect(res.status).not.toHaveBeenCalledWith(409);
+  });
+
+  test("unavailable query filters out 'rejected' and 'cancelled' at the DB layer", async () => {
+    // Verifies the SQL-level filter shape so we catch accidental
+    // regressions to the old allowlist behaviour or a filter swap.
+    mockShift.findByPk.mockResolvedValue(baselineShift());
+    mockAvailability.findAll.mockResolvedValue([]);
+
+    const res = mockRes();
+    await updateShift(assignPayload(), res);
+
+    // Orchestrator order: time-off (no Availability call), class (#1),
+    // unavailable (#2). Inspect call #2's where clause.
+    expect(mockAvailability.findAll.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const unavailableCallArgs = mockAvailability.findAll.mock.calls[1][0];
+    const util = await import("util");
+    const serialized = util.inspect(unavailableCallArgs, { depth: null });
+
+    // Must reference both excluded statuses...
+    expect(serialized).toContain("rejected");
+    expect(serialized).toContain("cancelled");
+    // ...and must NOT be the old approved-only filter.
+    expect(serialized).not.toMatch(/requestStatus:\s*'approved'/);
+  });
+
   test("refuses to silently pass when shift date is malformed", async () => {
     // Guard against the failure mode where an invalid shift date caused
     // validators to short-circuit as valid:true.
