@@ -258,12 +258,8 @@ const validateNoUnavailableConflicts = async (userId, shiftDate, startTime, endT
   const blockedRecords = await Availability.findAll({
     where: {
       userId,
-      availabilityType: {
-        [Op.in]: ["unavailable", "time_off"],
-      },
-      requestStatus: {
-        [Op.in]: ["approved", "pending"],
-      },
+      availabilityType: "unavailable",
+      requestStatus: "approved",
       [Op.or]: [
         { specificDate: shiftDate },
         { dayOfWeek, isRecurring: true },
@@ -280,8 +276,52 @@ const validateNoUnavailableConflicts = async (userId, shiftDate, startTime, endT
   if (hasConflict) {
     return {
       valid: false,
-      message: "Assigned user is unavailable during part of this shift window.",
+      message: "Worker is marked as unavailable during this shift time.",
       conflictType: "availability_conflict",
+    };
+  }
+
+  return { valid: true };
+};
+
+const validateClassScheduleConflict = async (userId, shiftDate, startTime, endTime) => {
+  if (!shiftDate) return { valid: true };
+
+  const dayOfWeek = getDayOfWeekFromDate(shiftDate);
+  const shiftStart = toMinutes(startTime);
+  const shiftEnd = toMinutes(endTime);
+
+  const classRecords = await Availability.findAll({
+    where: {
+      userId,
+      [Op.and]: [
+        {
+          [Op.or]: [
+            { sourceType: "class_schedule" },
+            { isSystemManaged: true },
+          ],
+        },
+        {
+          [Op.or]: [
+            { specificDate: shiftDate },
+            { dayOfWeek, isRecurring: true },
+          ],
+        },
+      ],
+    },
+  });
+
+  const hasConflict = classRecords.some((record) => {
+    const classStart = toMinutes(record.startTime);
+    const classEnd = toMinutes(record.endTime);
+    return intervalsOverlap(shiftStart, shiftEnd, classStart, classEnd);
+  });
+
+  if (hasConflict) {
+    return {
+      valid: false,
+      message: "Worker has a class scheduled at this time.",
+      conflictType: "class_schedule_conflict",
     };
   }
 
@@ -340,6 +380,16 @@ const validateAssignmentEligibility = async (
     return timeOffValidation;
   }
 
+  const classScheduleValidation = await validateClassScheduleConflict(
+    assignedUserId,
+    shiftDate,
+    startTime,
+    endTime,
+  );
+  if (!classScheduleValidation.valid) {
+    return classScheduleValidation;
+  }
+
   const unavailabilityValidation = await validateNoUnavailableConflicts(
     assignedUserId,
     shiftDate,
@@ -350,12 +400,7 @@ const validateAssignmentEligibility = async (
     return unavailabilityValidation;
   }
 
-  return validateAvailabilityCoverage(
-    assignedUserId,
-    shiftDate,
-    startTime,
-    endTime,
-  );
+  return { valid: true };
 };
 
 /**
