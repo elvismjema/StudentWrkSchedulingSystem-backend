@@ -1,9 +1,18 @@
   import users from "../controllers/user.controller.js";
+  import {
+    getMyPreferences,
+    updateMyPreferences,
+  } from "../controllers/notificationPreferences.controller.js";
   import  authenticate from "../authorization/authorization.js";
   import requireManager from "../authorization/requireManager.js";
   import { Router } from "express";
   var router = Router()
 
+
+  // Self-serve notification preferences. Mounted before /:id routes so the
+  // 'me' literal is matched explicitly and never collides with a numeric id.
+  router.get("/me/notification-preferences", [authenticate], getMyPreferences);
+  router.put("/me/notification-preferences", [authenticate], updateMyPreferences);
 
   // Create a new User
   router.post("/", [authenticate], users.create);

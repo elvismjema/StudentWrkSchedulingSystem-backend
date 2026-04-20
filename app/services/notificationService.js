@@ -90,6 +90,17 @@ const getTwilioClient = async () => {
 // Web Push notification
 // ---------------------------------------------------------------------------
 
+// Exported so other modules (e.g. the notification-preferences PUT endpoint)
+// can validate inbound keys against the canonical set instead of duplicating
+// the list. Order is intentional — it mirrors the order rendered in the UI.
+export const NOTIFICATION_PREFERENCE_KEYS = Object.freeze([
+  "shiftReminders",
+  "scheduleChanges",
+  "swapRequests",
+  "openShifts",
+  "timeOff",
+]);
+
 const NOTIFICATION_TYPE_TO_PREF_KEY = {
   shift_assignment: "scheduleChanges",
   shift_change: "scheduleChanges",
