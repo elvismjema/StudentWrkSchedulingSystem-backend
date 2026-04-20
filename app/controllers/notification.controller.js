@@ -66,7 +66,7 @@ export const getAllNotifications = async (req, res) => {
         });
       }
       condition.userId = requestedUserId;
-    } else if (authRole !== "manager" && authRole !== "admin") {
+    } else {
       condition.userId = authUserId;
     }
 
