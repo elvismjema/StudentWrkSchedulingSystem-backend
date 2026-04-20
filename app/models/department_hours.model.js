@@ -41,6 +41,12 @@ const DepartmentHours = SequelizeInstance.define(
       defaultValue: true,
       field: "is_default"
     },
+    is_closed: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: "is_closed"
+    },
     created_at: {
       type: DataTypes.DATE,
       allowNull: false,

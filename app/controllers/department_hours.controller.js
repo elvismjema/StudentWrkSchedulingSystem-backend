@@ -11,7 +11,8 @@ export const addDepartmentHours = async (req, res) => {
       open_time,
       close_time,
       specific_date,
-      is_default
+      is_default,
+      is_closed
     } = req.body;
 
     if (!department_id) {
@@ -35,7 +36,8 @@ export const addDepartmentHours = async (req, res) => {
       open_time,
       close_time,
       specific_date,
-      is_default
+      is_default,
+      is_closed: is_closed ?? false
     });
 
     return res.status(201).json({
@@ -138,7 +140,8 @@ export const updateDepartmentHours = async (req, res) => {
       "open_time",
       "close_time",
       "specific_date",
-      "is_default"
+      "is_default",
+      "is_closed"
     ];
 
     updatableFields.forEach((field) => {
