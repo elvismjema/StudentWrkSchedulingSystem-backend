@@ -66,6 +66,32 @@ const classifyRole = (role) => {
   return "student";
 };
 
+const unassignFutureShiftsInOldDepartments = async (userId, memberships, targetDepartmentId = null) => {
+  const Op = db.Sequelize.Op;
+  const today = new Date().toISOString().split("T")[0];
+  let removedShiftCount = 0;
+
+  for (const membership of memberships) {
+    const membershipRoleLevel = Number(membership.role?.permission_level || 0);
+    if (membershipRoleLevel >= 90) continue;
+    if (targetDepartmentId && Number(membership.department_id) === Number(targetDepartmentId)) continue;
+
+    const [affectedShifts] = await db.shift.update(
+      { assigned_user_id: null },
+      {
+        where: {
+          assigned_user_id: userId,
+          department_id: membership.department_id,
+          shift_date: { [Op.gte]: today },
+        },
+      },
+    );
+    removedShiftCount += affectedShifts;
+  }
+
+  return removedShiftCount;
+};
+
 // AT-22845: Student can view list of available departments
 exports.listAvailableDepartments = async (req, res) => {
   try {
@@ -443,20 +469,37 @@ exports.assignUserRole = async (req, res) => {
 
     if (membership) {
       // Update existing membership
-      if (targetRoleClassification === "student") {
-        await UserDepartment.update(
-          {
-            is_active: false,
-            deactivated_at: new Date(),
+      let removedShiftCount = 0;
+      if (targetRoleClassification !== "admin") {
+        const oldMemberships = await UserDepartment.findAll({
+          where: {
+            user_id: userId,
+            is_active: true,
+            ud_id: { [db.Sequelize.Op.ne]: membership.ud_id },
           },
-          {
-            where: {
-              user_id: userId,
-              is_active: true,
-              ud_id: { [db.Sequelize.Op.ne]: membership.ud_id },
+          include: [
+            {
+              model: db.role,
+              as: "role",
+              attributes: ["role_id", "permission_level"],
             },
-          },
+          ],
+        });
+
+        removedShiftCount = await unassignFutureShiftsInOldDepartments(
+          userId,
+          oldMemberships,
+          departmentId,
         );
+
+        for (const oldMembership of oldMemberships) {
+          const oldRoleLevel = Number(oldMembership.role?.permission_level || 0);
+          if (oldRoleLevel >= 90) continue;
+
+          oldMembership.is_active = false;
+          oldMembership.deactivated_at = new Date();
+          await oldMembership.save();
+        }
       }
 
       membership.role_id = roleId;
@@ -487,24 +530,42 @@ exports.assignUserRole = async (req, res) => {
 
       res.send({
         message: "User role updated successfully.",
+        removed_future_shifts: removedShiftCount,
         data: updatedMembership,
       });
     } else {
       // Create new membership
-      // For students, deactivate all existing active departments first
-      if (targetRoleClassification === "student") {
-        await UserDepartment.update(
-          { 
-            is_active: false,
-            deactivated_at: new Date()
+      // For non-admin assignments, deactivate old active departments first
+      let removedShiftCount = 0;
+      if (targetRoleClassification !== "admin") {
+        const oldMemberships = await UserDepartment.findAll({
+          where: {
+            user_id: userId,
+            is_active: true,
           },
-          {
-            where: {
-              user_id: userId,
-              is_active: true
-            }
-          }
+          include: [
+            {
+              model: db.role,
+              as: "role",
+              attributes: ["role_id", "permission_level"],
+            },
+          ],
+        });
+
+        removedShiftCount = await unassignFutureShiftsInOldDepartments(
+          userId,
+          oldMemberships,
+          departmentId,
         );
+
+        for (const oldMembership of oldMemberships) {
+          const oldRoleLevel = Number(oldMembership.role?.permission_level || 0);
+          if (oldRoleLevel >= 90) continue;
+
+          oldMembership.is_active = false;
+          oldMembership.deactivated_at = new Date();
+          await oldMembership.save();
+        }
       }
 
       const newMembership = await UserDepartment.create({
@@ -538,6 +599,7 @@ exports.assignUserRole = async (req, res) => {
 
       res.status(201).send({
         message: "User role assigned successfully.",
+        removed_future_shifts: removedShiftCount,
         data: createdMembership,
       });
     }

@@ -218,6 +218,7 @@ exports.createPendingAssignment = async (req, res) => {
     // If user already exists, apply immediately
     const existingUser = await User.findOne({ where: { email: normalizedEmail } });
     if (existingUser) {
+      let removedShiftCount = 0;
       if (classifyRole(role) !== "admin") {
         const activeMemberships = await UserDepartment.findAll({
           where: {
@@ -232,6 +233,12 @@ exports.createPendingAssignment = async (req, res) => {
             },
           ],
         });
+
+        removedShiftCount = await unassignFutureShiftsInOldDepartments(
+          existingUser.id,
+          activeMemberships,
+          departmentId,
+        );
 
         for (const membership of activeMemberships) {
           const membershipRoleLevel = Number(membership.role?.permission_level || 0);
@@ -282,6 +289,7 @@ exports.createPendingAssignment = async (req, res) => {
       return res.status(201).json({
         success: true,
         fulfilled_immediately: true,
+        removed_future_shifts: removedShiftCount,
         message: `Role assigned directly to existing user "${existingUser.fName} ${existingUser.lName}".`,
       });
     }
@@ -450,6 +458,32 @@ const classifyRole = (role) => {
   if (roleName.includes("admin") || permissionLevel >= 100) return "admin";
   if (roleName.includes("manager") || roleName.includes("supervisor") || permissionLevel >= 50) return "manager";
   return "student";
+};
+
+const unassignFutureShiftsInOldDepartments = async (userId, memberships, targetDepartmentId = null) => {
+  const Op = db.Sequelize.Op;
+  const today = new Date().toISOString().split("T")[0];
+  let removedShiftCount = 0;
+
+  for (const membership of memberships) {
+    const membershipRoleLevel = Number(membership.role?.permission_level || 0);
+    if (membershipRoleLevel >= 90) continue;
+    if (targetDepartmentId && Number(membership.department_id) === Number(targetDepartmentId)) continue;
+
+    const [affectedShifts] = await db.shift.update(
+      { assigned_user_id: null },
+      {
+        where: {
+          assigned_user_id: userId,
+          department_id: membership.department_id,
+          shift_date: { [Op.gte]: today },
+        },
+      },
+    );
+    removedShiftCount += affectedShifts;
+  }
+
+  return removedShiftCount;
 };
 
 // Admin: Assign a manager or student worker to a single department.
