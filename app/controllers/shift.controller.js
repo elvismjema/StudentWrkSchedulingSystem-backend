@@ -269,11 +269,18 @@ const validateNoUnavailableConflicts = async (userId, shiftDate, startTime, endT
     };
   }
 
+  // Product rule: a student marking themselves unavailable should block
+  // assignment immediately — not only after a manager has approved the
+  // row. Rows that a manager has explicitly rejected or cancelled no
+  // longer block (the approval workflow retains its semantics for those
+  // cases). Class-schedule unavailable rows are written with
+  // requestStatus = "approved" by the sync service, so they are a subset
+  // of "not rejected" and continue to block as expected.
   const blockedRecords = await Availability.findAll({
     where: {
       userId,
       availabilityType: "unavailable",
-      requestStatus: "approved",
+      requestStatus: { [Op.notIn]: ["rejected", "cancelled"] },
       [Op.or]: [
         { specificDate: isoDate },
         { dayOfWeek, isRecurring: true },
@@ -281,18 +288,24 @@ const validateNoUnavailableConflicts = async (userId, shiftDate, startTime, endT
     },
   });
 
-  const hasConflict = blockedRecords.some((availability) => {
+  const conflictingRecord = blockedRecords.find((availability) => {
     const blockedStart = toMinutes(availability.startTime);
     const blockedEnd = toMinutes(availability.endTime);
     if (blockedStart === null || blockedEnd === null) return false;
     return intervalsOverlap(shiftStart, shiftEnd, blockedStart, blockedEnd);
   });
 
-  if (hasConflict) {
+  if (conflictingRecord) {
     return {
       valid: false,
       message: "Worker is marked as unavailable during this shift time.",
       conflictType: "availability_conflict",
+      // Surfaced in the [ShiftAssign] blocked log so we can distinguish
+      // a student self-declared unavailable (pending) from a
+      // manager-approved one. Not part of the HTTP error payload
+      // consumed by clients today, but forward-compatible if we want
+      // to show it in UI later.
+      requestStatus: conflictingRecord.requestStatus,
     };
   }
 
@@ -438,7 +451,12 @@ const validateAssignmentEligibility = async (
     endTime,
   );
   if (!unavailabilityValidation.valid) {
-    logger.info("[ShiftAssign] blocked: unavailable", { ...ctx, reason: unavailabilityValidation.conflictType });
+    logger.info("[ShiftAssign] blocked: unavailable", {
+      ...ctx,
+      reason: unavailabilityValidation.conflictType,
+      // pending | approved | undefined (for invalid_shift_window)
+      availabilityStatus: unavailabilityValidation.requestStatus,
+    });
     return unavailabilityValidation;
   }
 
