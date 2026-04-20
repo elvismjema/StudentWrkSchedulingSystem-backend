@@ -35,6 +35,7 @@ import ShiftTaskCompletionRoutes from "./shiftTaskCompletion.routes.js";
 
 // ── NEW: Student Dashboard Routes ────────────────────────────────────────────
 import StudentRoutes from "./student.routes.js";
+import PushSubscriptionRoutes from "./pushSubscription.routes.js";
 
 
 const router = Router();
@@ -74,7 +75,6 @@ router.use("/task-lists", TaskListRoutes);
 router.use("/shift-task-completions", ShiftTaskCompletionRoutes);
 
 // ── NEW: Student Dashboard ───────────────────────────────────────────────────
-router.use("/student", StudentRoutes);
-
+router.use("/student", StudentRoutes);router.use("/push-subscriptions", PushSubscriptionRoutes);
 
 export default router;

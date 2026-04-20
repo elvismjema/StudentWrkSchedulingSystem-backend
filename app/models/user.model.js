@@ -29,6 +29,10 @@ const User = SequelizeInstance.define("user", {
     type: Sequelize.DATE,
     allowNull: true,
   },
+  notification_preferences: {
+    type: Sequelize.TEXT,
+    allowNull: true,
+  },
   role: {
     type: Sequelize.ENUM("student", "manager", "admin"),
     allowNull: false,

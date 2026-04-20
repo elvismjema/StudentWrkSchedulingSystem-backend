@@ -49,6 +49,11 @@ const addMissingColumns = async () => {
       column: 'task_list_id',
       sql: 'ADD COLUMN task_list_id INT NULL DEFAULT NULL',
     },
+    {
+      table: 'users',
+      column: 'notification_preferences',
+      sql: 'ADD COLUMN notification_preferences TEXT NULL DEFAULT NULL',
+    },
   ];
   // Make position_id nullable so template shifts can be saved before a position is chosen
   try {
@@ -94,6 +99,26 @@ const addMissingColumns = async () => {
     // systemd's restart burst limit, leaving the server permanently down (503).
     // The migration must be applied separately via `npx sequelize-cli db:migrate`.
     logger.warn(`Could not ensure timecard_approvals table (may need manual migration): ${err.message}`);
+  }
+
+  // Safety: ensure push_subscriptions table exists even when migrations were skipped.
+  try {
+    await db.sequelize.query(`
+      CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        endpoint TEXT NOT NULL,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_push_subscriptions_user (user_id),
+        CONSTRAINT fk_push_subscriptions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    logger.info("Ensured push_subscriptions table exists");
+  } catch (err) {
+    logger.warn(`Could not ensure push_subscriptions table (may need manual migration): ${err.message}`);
   }
 };
 
