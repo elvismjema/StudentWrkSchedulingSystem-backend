@@ -63,6 +63,44 @@ const ok = (res, data, message = null, status = 200) =>
 const fail = (res, message, status = 500) =>
   res.status(status).json({ success: false, message });
 
+/**
+ * Resolve the student's current active department membership and return its
+ * department_id (or null if no active membership exists).
+ *
+ * Several student-facing endpoints (getDashboard, getMySchedule, getOpenShifts)
+ * scope their queries to this department so a multi-department student only
+ * sees data for the department they are currently "clocked in" to. This helper
+ * was referenced by all three but never defined on the dev branch, causing a
+ * ReferenceError on every call. Endpoints with a downstream try/catch (like
+ * getDashboard) silently degraded; getMySchedule returned an error envelope
+ * the frontend treated as "no shifts". Restoring the helper fixes both.
+ *
+ * Selection rule: most recently assigned active membership wins. The role
+ * include is preserved from the original implementation in case downstream
+ * callers need it, even though this function only returns the id.
+ */
+const getCurrentActiveDepartmentId = async (userId) => {
+  const activeMembership = await UserDepartment.findOne({
+    where: {
+      user_id: userId,
+      is_active: true,
+    },
+    include: [
+      {
+        model: db.role,
+        as: "role",
+        attributes: ["role_id", "permission_level"],
+      },
+    ],
+    order: [
+      ["assigned_at", "DESC"],
+      ["ud_id", "DESC"],
+    ],
+  });
+
+  return activeMembership ? Number(activeMembership.department_id) : null;
+};
+
 const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 
 const resolveUserIdFromAuth = async (auth, { transaction } = {}) => {
