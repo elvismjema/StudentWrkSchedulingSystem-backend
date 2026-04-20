@@ -814,6 +814,9 @@ export const listShifts = async (req, res) => {
   try {
     const { department_id, assigned_user_id, is_published, shift_date, shift_status } = req.query;
     const where = {};
+    const authUserId = Number(req.auth?.userId);
+    const requestedAssignedUserId = assigned_user_id ? Number(assigned_user_id) : null;
+    let activeDepartmentId = null;
 
     // Detect "my own shifts" requests: when the caller is asking for shifts
     // assigned to themselves, skip the active-department auto-filter. Managers

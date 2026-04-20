@@ -505,7 +505,9 @@ exports.assignUserRole = async (req, res) => {
       membership.role_id = roleId;
       membership.position_id = positionId === null ? membership.position_id : positionId;
       membership.is_active = true;
+      membership.request_status = "approved";
       membership.deactivated_at = null;
+      membership.assigned_at = new Date();
       await membership.save();
 
       const updatedMembership = await UserDepartment.findByPk(membership.ud_id, {
