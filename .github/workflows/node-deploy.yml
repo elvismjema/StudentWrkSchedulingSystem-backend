@@ -81,7 +81,14 @@ jobs:
             cd /home/ubuntu/nodeapps/sev2026/t2
             npm ci --omit=dev
             npm run schema:sync
+            npx sequelize-cli db:migrate || echo "⚠️ Migrations skipped (non-fatal)"
             sudo cp workerscheduling-t2-backend.service /etc/systemd/system/workerscheduling-t2-backend.service
             sudo systemctl daemon-reload
             sudo systemctl enable workerscheduling-t2-backend
+            sudo systemctl reset-failed workerscheduling-t2-backend || true
             sudo systemctl restart workerscheduling-t2-backend
+            sleep 5
+            echo "=== SERVICE STATUS ==="
+            sudo systemctl status workerscheduling-t2-backend --no-pager || true
+            echo "=== LAST 40 LOG LINES ==="
+            sudo journalctl -u workerscheduling-t2-backend -n 40 --no-pager || true

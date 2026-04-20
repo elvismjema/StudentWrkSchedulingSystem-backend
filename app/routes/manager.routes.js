@@ -7,8 +7,6 @@ import {
   reviewSwapRequest,
   getManagerTimeOffRequests,
   reviewManagerTimeOffRequest,
-  getManagerOpenShiftClaims,
-  reviewManagerOpenShiftClaim,
 } from "../controllers/manager.controller.js";
 
 const router = Router();
@@ -20,7 +18,5 @@ router.get("/swap-requests", [authenticate, requireManager], getManagerSwapReque
 router.put("/swap-requests/:id", [authenticate, requireManager], reviewSwapRequest);
 router.get("/time-off-requests", [authenticate, requireManager], getManagerTimeOffRequests);
 router.put("/time-off-requests/:id", [authenticate, requireManager], reviewManagerTimeOffRequest);
-router.get("/open-shift-claims", [authenticate, requireManager], getManagerOpenShiftClaims);
-router.put("/open-shift-claims/:id", [authenticate, requireManager], reviewManagerOpenShiftClaim);
 
 export default router;

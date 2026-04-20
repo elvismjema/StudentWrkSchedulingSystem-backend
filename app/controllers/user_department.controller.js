@@ -8,6 +8,8 @@ import {
 const UserDepartment = db.userDepartment;
 const Department = db.department;
 
+const exports = {};
+
 // Get student's single active department
 exports.getStudentActiveDepartment = async (userId) => {
   try {
@@ -41,8 +43,6 @@ exports.getStudentActiveDepartment = async (userId) => {
     return null;
   }
 };
-
-const exports = {};
 
 const classifyRole = (role) => {
   const roleName = String(role?.role_name || "").toLowerCase();

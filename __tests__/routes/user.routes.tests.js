@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 const mockAuthenticate = jest.fn((req, res, next) => next());
 const mockRequireManager = jest.fn((req, res, next) => next());
 const mockUsersController = {
@@ -9,22 +10,22 @@ const mockUsersController = {
   deactivateUser: jest.fn(),
 };
 
-jest.mock("../../app/authorization/authorization.js", () => ({
+jest.mock("app/authorization/authorization.js", () => ({
   __esModule: true,
   default: mockAuthenticate,
 }));
 
-jest.mock("../../app/authorization/requireManager.js", () => ({
+jest.mock("app/authorization/requireManager.js", () => ({
   __esModule: true,
   default: mockRequireManager,
 }));
 
-jest.mock("../../app/controllers/user.controller.js", () => ({
+jest.mock("app/controllers/user.controller.js", () => ({
   __esModule: true,
   default: mockUsersController,
 }));
 
-const router = require("../../app/routes/user.routes.js").default;
+import router from "app/routes/user.routes.js";
 
 describe("user routes auth protection", () => {
   it("protects deactivate endpoint with auth and manager middleware", () => {

@@ -5,7 +5,7 @@ const Position = db.position;
 // Create and save a new position
 export const createPosition = async (req, res) => {
   try {
-    const { department_id, position_name, description } = req.body;
+    const { department_id, position_name, description, color } = req.body;
 
     if (!department_id || !position_name) {
       return res.status(400).json({
@@ -25,7 +25,8 @@ export const createPosition = async (req, res) => {
     const position = await Position.create({
       department_id,
       position_name,
-      description
+      description,
+      color: color || null
     });
 
     const createdPosition = await Position.findByPk(position.position_id, {
@@ -134,6 +135,11 @@ export const updatePosition = async (req, res) => {
 
     if (description !== undefined) {
       position.description = description;
+    }
+
+    const { color } = req.body;
+    if (color !== undefined) {
+      position.color = color || null;
     }
 
     position.updated_at = new Date();

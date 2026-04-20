@@ -24,10 +24,12 @@ import UserDepartmentRoutes from "./user_department.routes.js";
 import ManagerRoutes from "./manager.routes.js";
 import AdminRoutes from "./admin.routes.js";
 import ScheduleTemplateRoutes from "./schedule_template.routes.js";
-import ShiftTradeRoutes from "./shift_trade.routes.js";
 import PositionQualificationRoutes from "./position_qualification.routes.js";
 import ShiftTagRoutes from "./shift_tag.routes.js";
 import TagRoutes from "./tag.routes.js";
+
+import ReportRoutes from "./report.routes.js";
+import SystemSettingRoutes from "./system_setting.routes.js";
 
 // ── NEW: Student Dashboard Routes ────────────────────────────────────────────
 import StudentRoutes from "./student.routes.js";
@@ -60,10 +62,12 @@ router.use("/user-departments", UserDepartmentRoutes);
 router.use("/manager", ManagerRoutes);
 router.use("/admin", AdminRoutes);
 router.use("/schedule-templates", ScheduleTemplateRoutes);
-router.use("/shift-trades", ShiftTradeRoutes);
 router.use("/position-qualifications", PositionQualificationRoutes);
 router.use("/shift-tags", ShiftTagRoutes);
 router.use("/tags", TagRoutes);
+
+router.use("/reports", ReportRoutes);
+router.use("/system-settings", SystemSettingRoutes);
 
 // ── NEW: Student Dashboard ───────────────────────────────────────────────────
 router.use("/student", StudentRoutes);

@@ -17,6 +17,9 @@ router.post("/bulk-publish", [verifyToken, requireManager, requireDepartmentMana
 // Retrieve all Shifts with optional filters
 router.get("/", [authenticate], shiftController.listShifts);
 
+// Retrieve assignable workers for a shift time window
+router.get("/assignable-workers", [verifyToken, requireManager, requireDepartmentManager], shiftController.listAssignableWorkers);
+
 // Retrieve shift audit trail
 router.get("/:id/audit", [verifyToken, requireManager, requireDepartmentManager], shiftController.getShiftAuditTrail);
 

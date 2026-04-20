@@ -20,6 +20,10 @@ const addMissingColumns = async () => {
     { table: 'users', column: 'is_active', sql: 'ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1' },
     { table: 'users', column: 'deactivated_at', sql: 'ADD COLUMN deactivated_at DATETIME NULL' },
     { table: 'positions', column: 'is_critical', sql: "ADD COLUMN is_critical TINYINT(1) NOT NULL DEFAULT 0" },
+    { table: 'availabilities', column: 'sourceType', sql: "ADD COLUMN sourceType VARCHAR(255) NULL DEFAULT NULL" },
+    { table: 'availabilities', column: 'sourceRef', sql: "ADD COLUMN sourceRef VARCHAR(255) NULL DEFAULT NULL" },
+    { table: 'availabilities', column: 'isSystemManaged', sql: "ADD COLUMN isSystemManaged TINYINT(1) NOT NULL DEFAULT 0" },
+    { table: 'availabilities', column: 'syncBatchId', sql: "ADD COLUMN syncBatchId VARCHAR(255) NULL DEFAULT NULL" },
     {
       table: 'user_departments',
       column: 'request_status',
@@ -80,8 +84,11 @@ const addMissingColumns = async () => {
     `);
     logger.info("Ensured timecard_approvals table exists");
   } catch (err) {
-    logger.error(`Failed ensuring timecard_approvals table: ${err.message}`);
-    throw err;
+    // Log but do NOT throw — if the production DB user lacks CREATE TABLE privilege
+    // (common in prod) this would crash the server on every startup and trip
+    // systemd's restart burst limit, leaving the server permanently down (503).
+    // The migration must be applied separately via `npx sequelize-cli db:migrate`.
+    logger.warn(`Could not ensure timecard_approvals table (may need manual migration): ${err.message}`);
   }
 };
 
@@ -131,8 +138,17 @@ const startServer = async () => {
     // Add any missing columns before syncing
     await addMissingColumns();
 
-    await db.sequelize.sync();
-    logger.info("Database schema synchronized");
+    // Sync Sequelize models with the database (creates any missing tables).
+    // This is intentionally non-fatal: if the production DB user lacks DDL
+    // privileges or a new table can't be auto-created, the server still starts
+    // and serves all existing features. New tables must be created via:
+    //   npx sequelize-cli db:migrate
+    try {
+      await db.sequelize.sync();
+      logger.info("Database schema synchronized");
+    } catch (syncErr) {
+      logger.warn(`Database schema sync skipped — run migrations manually if new features are missing: ${syncErr.message}`);
+    }
 
     // Seed essential data (uses findOrCreate, safe to run every startup)
     await runSeeds();
