@@ -39,6 +39,7 @@ import TimeOffRequest from "./time_off_request.model.js";
 import BreakRecord from "./break_record.model.js";
 import TimecardApproval from "./timecard_approval.model.js";
 import SystemSetting from "./system_setting.model.js";
+import PushSubscription from "./pushSubscription.model.js";
 
 
 const db = {};
@@ -81,6 +82,7 @@ db.timeOffRequest = TimeOffRequest;
 db.breakRecord = BreakRecord;
 db.timecardApproval = TimecardApproval;
 db.systemSetting = SystemSetting;
+db.pushSubscription = PushSubscription;
 
 
 // foreign key for session
@@ -778,5 +780,9 @@ db.shiftTaskCompletion.belongsTo(db.taskListItem, { foreignKey: "task_list_item_
 
 db.user.hasMany(db.shiftTaskCompletion, { foreignKey: "completed_by", as: "taskCompletions" });
 db.shiftTaskCompletion.belongsTo(db.user, { foreignKey: "completed_by", as: "completedByUser" });
+
+// ── PushSubscription associations ─────────────────────────────────────────────
+db.user.hasMany(db.pushSubscription, { foreignKey: "user_id", as: "pushSubscriptions", onDelete: "CASCADE" });
+db.pushSubscription.belongsTo(db.user, { foreignKey: "user_id", as: "user" });
 
 export default db;

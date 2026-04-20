@@ -15,6 +15,7 @@ const User = db.user;
 
 let smtpTransportPromise = null;
 let twilioClientPromise = null;
+let webpushClientPromise = null;
 
 const isTruthy = (value, defaultValue = false) => {
   if (value === undefined || value === null || value === "") return defaultValue;
@@ -83,6 +84,127 @@ const getTwilioClient = async () => {
   })();
 
   return twilioClientPromise;
+};
+
+// ---------------------------------------------------------------------------
+// Web Push notification
+// ---------------------------------------------------------------------------
+
+const NOTIFICATION_TYPE_TO_PREF_KEY = {
+  shift_assignment: "scheduleChanges",
+  shift_change: "scheduleChanges",
+  shift_cancellation: "scheduleChanges",
+  shift_reassignment: "scheduleChanges",
+  schedule_published: "scheduleChanges",
+  shift_reminder: "shiftReminders",
+  swap_request: "swapRequests",
+  swap_approved: "swapRequests",
+  swap_denied: "swapRequests",
+  coverage_gap: "openShifts",
+  open_shift: "openShifts",
+  time_off_approved: "timeOff",
+  time_off_denied: "timeOff",
+  time_off_request: "timeOff",
+};
+
+const getWebpushClient = async () => {
+  if (webpushClientPromise) return webpushClientPromise;
+
+  webpushClientPromise = (async () => {
+    const publicKey = process.env.VAPID_PUBLIC_KEY;
+    const privateKey = process.env.VAPID_PRIVATE_KEY;
+    const subject = process.env.VAPID_EMAIL || "mailto:admin@workerscheduling.eaglesoftwareteam.com";
+
+    if (!publicKey || !privateKey) {
+      return null;
+    }
+
+    try {
+      const webpush = await import("web-push");
+      webpush.default.setVapidDetails(subject, publicKey, privateKey);
+      return webpush.default;
+    } catch (error) {
+      logger.error(`[NotificationService] Failed to initialize web-push: ${error.message}`);
+      return null;
+    }
+  })();
+
+  return webpushClientPromise;
+};
+
+export const sendWebPushNotification = async (userId, title, message, options = {}) => {
+  if (!userId) return;
+
+  const webpush = await getWebpushClient();
+  if (!webpush) {
+    logger.debug("[NotificationService][PUSH] VAPID keys not configured; skipping push delivery");
+    return;
+  }
+
+  try {
+    const PushSubscription = db.pushSubscription;
+    if (!PushSubscription) {
+      logger.debug("[NotificationService][PUSH] PushSubscription model not registered");
+      return;
+    }
+
+    const [user, subscriptions] = await Promise.all([
+      User.findByPk(userId, { attributes: ["id", "notification_preferences"] }),
+      PushSubscription.findAll({ where: { user_id: userId } }),
+    ]);
+
+    if (!subscriptions || subscriptions.length === 0) return;
+
+    // Check per-preference opt-out
+    const prefKey = options.type ? NOTIFICATION_TYPE_TO_PREF_KEY[options.type] : null;
+    if (prefKey && user) {
+      let prefs = {};
+      try {
+        prefs = user.notification_preferences ? JSON.parse(user.notification_preferences) : {};
+      } catch {
+        prefs = {};
+      }
+      if (prefs[prefKey] === false) {
+        logger.debug(`[NotificationService][PUSH] User ${userId} opted out of '${prefKey}' push notifications`);
+        return;
+      }
+    }
+
+    const payload = JSON.stringify({
+      title,
+      body: message,
+      url: options.link || "/",
+      tag: options.type || "oc-schedule",
+      requireInteraction: options.priority === "high",
+    });
+
+    const staleIds = [];
+    await Promise.all(
+      subscriptions.map(async (sub) => {
+        try {
+          await webpush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            payload,
+          );
+        } catch (err) {
+          if (err.statusCode === 410 || err.statusCode === 404) {
+            staleIds.push(sub.id);
+          } else {
+            logger.warn(`[NotificationService][PUSH] Failed to send push to user ${userId}: ${err.message}`);
+          }
+        }
+      }),
+    );
+
+    for (const id of staleIds) {
+      await PushSubscription.destroy({ where: { id } });
+    }
+    if (staleIds.length > 0) {
+      logger.info(`[NotificationService][PUSH] Removed ${staleIds.length} stale subscriptions for user ${userId}`);
+    }
+  } catch (err) {
+    logger.error(`[NotificationService] Web push delivery error for user ${userId}: ${err.message}`);
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -222,6 +344,7 @@ export const sendSmsNotification = async (user, message) => {
  * @param {string} [options.priority] - "normal" | "high"
  * @param {boolean} [options.skipEmail] - set true to suppress email
  * @param {boolean} [options.skipSms]   - set true to suppress SMS
+ * @param {boolean} [options.skipPush]  - set true to suppress web push
  */
 export const sendNotification = async (userId, title, message, options = {}) => {
   if (!userId) return;
@@ -254,6 +377,15 @@ export const sendNotification = async (userId, title, message, options = {}) => 
       await sendSmsNotification(user, message);
     } catch (err) {
       logger.error(`[NotificationService] SMS delivery error for user ${userId}: ${err.message}`);
+    }
+  }
+
+  // 5) Web Push delivery.
+  if (!options.skipPush) {
+    try {
+      await sendWebPushNotification(userId, title, message, options);
+    } catch (err) {
+      logger.error(`[NotificationService] Web push delivery error for user ${userId}: ${err.message}`);
     }
   }
 };
