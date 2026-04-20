@@ -9,8 +9,6 @@ const UserDepartment = db.userDepartment;
 const Department = db.department;
 const exports = {};
 
-const exports = {};
-
 // Get student's single active department
 exports.getStudentActiveDepartment = async (userId) => {
   try {
