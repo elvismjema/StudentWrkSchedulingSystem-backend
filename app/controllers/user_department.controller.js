@@ -7,6 +7,7 @@ import {
 
 const UserDepartment = db.userDepartment;
 const Department = db.department;
+const exports = {};
 
 // Get student's single active department
 exports.getStudentActiveDepartment = async (userId) => {
@@ -33,6 +34,11 @@ exports.getStudentActiveDepartment = async (userId) => {
           attributes: ["position_id", "position_name"],
         },
       ],
+      order: [
+        ["is_active", "DESC"],
+        ["assigned_at", "DESC"],
+        ["ud_id", "DESC"],
+      ],
     });
 
     return activeDepartment;
@@ -41,8 +47,6 @@ exports.getStudentActiveDepartment = async (userId) => {
     return null;
   }
 };
-
-const exports = {};
 
 const classifyRole = (role) => {
   const roleName = String(role?.role_name || "").toLowerCase();
@@ -172,6 +176,11 @@ exports.listUserDepartments = async (req, res) => {
           as: "position",
           attributes: ["position_id", "position_name"],
         },
+      ],
+      order: [
+        ["is_active", "DESC"],
+        ["assigned_at", "DESC"],
+        ["ud_id", "DESC"],
       ],
     });
 
@@ -432,8 +441,26 @@ exports.assignUserRole = async (req, res) => {
 
     if (membership) {
       // Update existing membership
+      if (targetRoleClassification === "student") {
+        await UserDepartment.update(
+          {
+            is_active: false,
+            deactivated_at: new Date(),
+          },
+          {
+            where: {
+              user_id: userId,
+              is_active: true,
+              ud_id: { [db.Sequelize.Op.ne]: membership.ud_id },
+            },
+          },
+        );
+      }
+
       membership.role_id = roleId;
       membership.position_id = positionId === null ? membership.position_id : positionId;
+      membership.is_active = true;
+      membership.deactivated_at = null;
       await membership.save();
 
       const updatedMembership = await UserDepartment.findByPk(membership.ud_id, {
