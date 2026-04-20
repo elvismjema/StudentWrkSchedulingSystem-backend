@@ -218,6 +218,32 @@ exports.createPendingAssignment = async (req, res) => {
     // If user already exists, apply immediately
     const existingUser = await User.findOne({ where: { email: normalizedEmail } });
     if (existingUser) {
+      if (classifyRole(role) !== "admin") {
+        const activeMemberships = await UserDepartment.findAll({
+          where: {
+            user_id: existingUser.id,
+            is_active: true,
+          },
+          include: [
+            {
+              model: Role,
+              as: "role",
+              attributes: ["role_id", "permission_level"],
+            },
+          ],
+        });
+
+        for (const membership of activeMemberships) {
+          const membershipRoleLevel = Number(membership.role?.permission_level || 0);
+          if (membershipRoleLevel >= 90) continue;
+          if (Number(membership.department_id) === departmentId) continue;
+
+          membership.is_active = false;
+          membership.deactivated_at = new Date();
+          await membership.save();
+        }
+      }
+
       const existingMembership = await UserDepartment.findOne({
         where: {
           user_id: existingUser.id,
