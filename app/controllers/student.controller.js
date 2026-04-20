@@ -22,6 +22,10 @@ import db from "../models/index.js";
 import logger from "../config/logger.js";
 import { sendNotification } from "../services/notificationService.js";
 import { resolveHighestRoleForUser } from "../authorization/roleAccess.js";
+import {
+  fetchStudentSchedule,
+  normalizeScheduleToAvailabilityBlocks,
+} from "../services/studentClassSchedule.service.js";
 
 const { Op } = db.Sequelize;
 
@@ -59,26 +63,29 @@ const ok = (res, data, message = null, status = 200) =>
 const fail = (res, message, status = 500) =>
   res.status(status).json({ success: false, message });
 
-const getCurrentActiveDepartmentId = async (userId) => {
-  const activeMembership = await UserDepartment.findOne({
-    where: {
-      user_id: userId,
-      is_active: true,
-    },
-    include: [
-      {
-        model: db.role,
-        as: "role",
-        attributes: ["role_id", "permission_level"],
-      },
-    ],
-    order: [
-      ["assigned_at", "DESC"],
-      ["ud_id", "DESC"],
-    ],
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
+
+const resolveUserIdFromAuth = async (auth, { transaction } = {}) => {
+  const directUserId = Number(auth?.userId);
+  if (Number.isInteger(directUserId) && directUserId > 0) {
+    return directUserId;
+  }
+
+  const normalizedEmail = normalizeEmail(auth?.email);
+  if (!normalizedEmail) {
+    return null;
+  }
+
+  const userByEmail = await User.findOne({
+    where: db.Sequelize.where(
+      db.Sequelize.fn("LOWER", db.Sequelize.col("email")),
+      normalizedEmail
+    ),
+    attributes: ["id"],
+    ...(transaction ? { transaction } : {}),
   });
 
-  return activeMembership ? Number(activeMembership.department_id) : null;
+  return userByEmail?.id || null;
 };
 
 /**
@@ -121,6 +128,103 @@ const getCurrentWeekRange = () => {
   };
 };
 
+/**
+ * Build a predicate that returns true when a candidate shift is blocked by the
+ * student's availability. A shift is considered unavailable when it overlaps
+ * with any of the following:
+ *   - An `availabilityType` of "unavailable" or "time_off" block for the same
+ *     day-of-week (recurring) that overlaps the shift's time window.
+ *   - A block with a `specificDate` that matches the shift date and overlaps
+ *     the shift's time window.
+ *   - An approved `TimeOffRequest` whose date range contains the shift date.
+ *
+ * NOTE: class-schedule-sourced rows are stored as "unavailable" with
+ * `sourceType='class_schedule'`, so they are included automatically.
+ *
+ * @param {number} userId
+ * @param {Array<{shift_date:string,start_time:string,end_time:string}>} shifts
+ * @returns {Promise<Array>} filtered shifts (no conflicts)
+ */
+const filterOutUnavailableShifts = async (userId, shifts) => {
+  if (!Array.isArray(shifts) || shifts.length === 0) return shifts || [];
+
+  // Determine the shift-date window so we only pull the relevant availability rows.
+  const dateStrings = shifts
+    .map((s) => s.shift_date)
+    .filter(Boolean)
+    .sort();
+  const minDate = dateStrings[0];
+  const maxDate = dateStrings[dateStrings.length - 1];
+
+  const [blockingBlocks, approvedTimeOff] = await Promise.all([
+    Availability.findAll({
+      where: {
+        userId,
+        availabilityType: { [Op.in]: ["unavailable", "time_off"] },
+        [Op.or]: [
+          { specificDate: null },
+          { specificDate: { [Op.between]: [minDate, maxDate] } },
+        ],
+      },
+      attributes: [
+        "dayOfWeek",
+        "startTime",
+        "endTime",
+        "specificDate",
+        "availabilityType",
+        "sourceType",
+      ],
+    }),
+    TimeOffRequest.findAll({
+      where: {
+        user_id: userId,
+        status: "approved",
+        start_date: { [Op.lte]: maxDate },
+        end_date: { [Op.gte]: minDate },
+      },
+      attributes: ["start_date", "end_date"],
+    }),
+  ]);
+
+  const overlapsTime = (aStart, aEnd, bStart, bEnd) =>
+    toMinutes(aStart) < toMinutes(bEnd) && toMinutes(aEnd) > toMinutes(bStart);
+
+  // Day-of-week for an ISO date string (0=Sunday..6=Saturday to match the
+  // Availability.dayOfWeek convention).
+  const getDayOfWeekForDate = (dateOnly) => {
+    const [y, m, d] = String(dateOnly).split("-").map(Number);
+    return new Date(y, m - 1, d).getDay();
+  };
+
+  return shifts.filter((shift) => {
+    const shiftDate = shift.shift_date;
+    const dow = getDayOfWeekForDate(shiftDate);
+
+    // Hard block: approved time-off covering the shift date.
+    for (const to of approvedTimeOff) {
+      if (shiftDate >= to.start_date && shiftDate <= to.end_date) return false;
+    }
+
+    // Availability blocks: prefer specificDate matches, fall back to recurring dayOfWeek.
+    for (const block of blockingBlocks) {
+      if (block.specificDate) {
+        if (
+          block.specificDate === shiftDate &&
+          overlapsTime(shift.start_time, shift.end_time, block.startTime, block.endTime)
+        ) {
+          return false;
+        }
+      } else if (Number(block.dayOfWeek) === dow) {
+        if (overlapsTime(shift.start_time, shift.end_time, block.startTime, block.endTime)) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  });
+};
+
 /** Shared include array for shift queries */
 const shiftIncludes = [
   { model: Department, as: "department", attributes: ["department_id", "department_name"] },
@@ -160,7 +264,9 @@ const shiftIncludes = [
 export const getDashboard = async (req, res) => {
   try {
     const userId = req.auth.userId;
-    const today = new Date().toISOString().split("T")[0];
+    const now = new Date();
+    const today = now.toISOString().split("T")[0];
+    const currentTime = now.toTimeString().slice(0, 8); // HH:MM:SS for end_time comparison
     const { weekStart, weekEnd } = getCurrentWeekRange();
 
     // Use the student's current department context for dashboard data.
@@ -173,6 +279,7 @@ export const getDashboard = async (req, res) => {
     const [
       todayShifts,
       weekShifts,
+      upcomingShifts,
       openClockRecord,
       unreadCount,
       pendingAcknowledgements,
@@ -187,7 +294,8 @@ export const getDashboard = async (req, res) => {
           ...studentDepartmentWhere,
           shift_date: today,
           is_published: true,
-          [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+          // Exclude cancelled and approved_cover (cover approved = shift posted as open, no longer Michael's)
+          [Op.or]: [{ trade_status: null }, { trade_status: { [Op.notIn]: ["cancelled", "approved_cover"] } }],
         },
         include: shiftIncludes,
         order: [["start_time", "ASC"]],
@@ -200,10 +308,31 @@ export const getDashboard = async (req, res) => {
           ...studentDepartmentWhere,
           shift_date: { [Op.between]: [weekStart, weekEnd] },
           is_published: true,
-          [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+          // Exclude cancelled and approved_cover (cover approved = shift posted as open, no longer Michael's)
+          [Op.or]: [{ trade_status: null }, { trade_status: { [Op.notIn]: ["cancelled", "approved_cover"] } }],
         },
         include: shiftIncludes,
         order: [["shift_date", "ASC"], ["start_time", "ASC"]],
+      }),
+
+      // Upcoming shifts beyond this week. The dashboard's 'Up Next' hero +
+      // secondary stack needs to surface accepted shifts that fall past the
+      // current calendar week (weekShifts is Mon–Sun scoped). We cap at 10 so
+      // the dashboard stays a dashboard — the full list lives in Schedule.
+      Shift.findAll({
+        where: {
+          assigned_user_id: userId,
+          is_published: true,
+          // Today onward — today's shifts that haven't ended yet are already
+          // covered by todayShifts; any same-day row returned here will be
+          // deduped client-side by id.
+          shift_date: { [Op.gte]: today },
+          // Same exclusion rules as weekShifts — keep semantics consistent.
+          [Op.or]: [{ trade_status: null }, { trade_status: { [Op.notIn]: ["cancelled", "approved_cover"] } }],
+        },
+        include: shiftIncludes,
+        order: [["shift_date", "ASC"], ["start_time", "ASC"]],
+        limit: 10,
       }),
 
       // Current clock-in status (includes open break record to derive onBreak)
@@ -233,23 +362,35 @@ export const getDashboard = async (req, res) => {
         },
       }),
 
-      // Open shifts: unassigned + needing cover — only from student's departments
-      currentDepartmentId
-        ? Shift.findAndCountAll({
+      // Open shifts: unassigned + needing cover — only from student's departments.
+      // NOTE: we intentionally over-fetch here so the availability filter below
+      // has a pool to draw from before we slice to the preview size.
+      // Exclude shifts that have already ended (today's shifts past their end_time).
+      userDeptIds.length > 0
+        ? Shift.findAll({
             where: {
               is_published: true,
-              shift_date: { [Op.gte]: today },
-              department_id: currentDepartmentId,
-              [Op.or]: [
-                // Truly unassigned
+              department_id: { [Op.in]: userDeptIds },
+              [Op.and]: [
+                // Not expired: future date, or today-but-still-ahead
                 {
-                  assigned_user_id: null,
-                  [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+                  [Op.or]: [
+                    { shift_date: { [Op.gt]: today } },
+                    { shift_date: today, end_time: { [Op.gt]: currentTime } },
+                  ],
                 },
-                // Needing cover (not the student's own shift)
+                // Pickable status
                 {
-                  trade_status: "pending_cover",
-                  assigned_user_id: { [Op.ne]: userId },
+                  [Op.or]: [
+                    {
+                      assigned_user_id: null,
+                      [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+                    },
+                    {
+                      trade_status: "approved_cover",
+                      assigned_user_id: { [Op.ne]: userId },
+                    },
+                  ],
                 },
               ],
             },
@@ -258,10 +399,14 @@ export const getDashboard = async (req, res) => {
               { model: Position, as: "position", attributes: ["position_id", "position_name"] },
             ],
             order: [["shift_date", "ASC"], ["start_time", "ASC"]],
-            limit: 3,
+            limit: 50,
           })
-        : Promise.resolve({ count: 0, rows: [] }),
+        : Promise.resolve([]),
     ]);
+
+    // Hide shifts that conflict with the student's declared unavailability
+    // (manual unavailable blocks, class-schedule blocks, approved time-off).
+    const availableOpenShifts = await filterOutUnavailableShifts(userId, openShifts);
 
     // Derive next shift (first today shift with end_time > now, or first future shift this week)
     // Use UTC consistently — today is already UTC, so nowMinutes must also be UTC
@@ -270,6 +415,13 @@ export const getDashboard = async (req, res) => {
     let nextShift = todayShifts.find((s) => toMinutes(s.end_time) > nowMinutes) || null;
     if (!nextShift && weekShifts.length > 0) {
       nextShift = weekShifts.find(
+        (s) => s.shift_date > today || (s.shift_date === today && toMinutes(s.end_time) > nowMinutes)
+      ) || null;
+    }
+    // Extend the fallback into upcomingShifts so users whose next accepted
+    // shift sits beyond the current week still see it on the dashboard.
+    if (!nextShift && upcomingShifts.length > 0) {
+      nextShift = upcomingShifts.find(
         (s) => s.shift_date > today || (s.shift_date === today && toMinutes(s.end_time) > nowMinutes)
       ) || null;
     }
@@ -290,6 +442,7 @@ export const getDashboard = async (req, res) => {
       nextShift,
       todayShifts,
       weekShifts,
+      upcomingShifts,
       scheduledDays,
       estimatedWeeklyHours: +(weeklyMinutes / 60).toFixed(1),
       clockStatus: openClockRecord
@@ -311,8 +464,8 @@ export const getDashboard = async (req, res) => {
       },
       unreadNotifications: unreadCount,
       openShifts: {
-        count: openShifts.count,
-        preview: openShifts.rows,
+        count: availableOpenShifts.length,
+        preview: availableOpenShifts.slice(0, 3),
       },
     });
   } catch (error) {
@@ -360,7 +513,8 @@ export const getMySchedule = async (req, res) => {
         department_id: currentDepartmentId,
         shift_date: { [Op.between]: [startDate, endDate] },
         is_published: true,
-        [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+        // Exclude cancelled and approved_cover (cover approved = shift posted as open, no longer the student's responsibility)
+        [Op.or]: [{ trade_status: null }, { trade_status: { [Op.notIn]: ["cancelled", "approved_cover"] } }],
       },
       include: [
         ...shiftIncludes,
@@ -427,7 +581,12 @@ export const getMySchedule = async (req, res) => {
 export const getOpenShifts = async (req, res) => {
   try {
     const userId = req.auth.userId;
-    const today = new Date().toISOString().split("T")[0];
+    const now = new Date();
+    const today = now.toISOString().split("T")[0];
+    // HH:MM:SS — compared against shift.end_time so we hide shifts that
+    // have already finished today. Example: 6:00–7:30 AM shift is hidden
+    // after 7:30 AM the same day.
+    const currentTime = now.toTimeString().slice(0, 8);
     const { departmentId, startDate, endDate } = req.query;
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(Number(req.query.limit) || 25, 100);
@@ -452,22 +611,32 @@ export const getOpenShifts = async (req, res) => {
 
     // Two types of open shifts:
     // 1. Truly unassigned shifts (assigned_user_id is null)
-    // 2. Shifts where cover was approved by manager (trade_status = 'approved_cover')
-    //    NOTE: 'pending_cover' shifts are NOT shown — manager must approve first.
-    const dateFilter = { [Op.gte]: startDate || today };
-    if (endDate) dateFilter[Op.lte] = endDate;
-
-    const where = {
-      is_published: true,
-      shift_date: dateFilter,
-      department_id: { [Op.in]: targetDeptIds },
+    // 2. Cover-approved shifts (trade_status = 'approved_cover'): manager
+    //    approval also NULLs assigned_user_id so they match clause #1 too —
+    //    clause #2 is kept defensively in case a row drifts out of sync.
+    //    'pending_cover' shifts are NOT shown — manager must approve first.
+    //
+    // Shifts that have already ended (whole past dates, or today's shifts
+    // whose end_time is in the past) are filtered out so the list only
+    // contains shifts a student can actually still work.
+    const earliestDate = startDate && startDate > today ? startDate : today;
+    const notExpiredClause = {
       [Op.or]: [
-        // Unassigned open shifts
+        { shift_date: { [Op.gt]: today } }, // any future date is fine
+        { shift_date: today, end_time: { [Op.gt]: currentTime } }, // today, not yet ended
+      ],
+    };
+    const dateRangeClause = endDate
+      ? { shift_date: { [Op.between]: [earliestDate, endDate] } }
+      : { shift_date: { [Op.gte]: earliestDate } };
+    const statusClause = {
+      [Op.or]: [
+        // Truly unassigned (also captures cover-approved whose assigned_user_id was nulled)
         {
           assigned_user_id: null,
-          [Op.or]: [{ trade_status: null }, { trade_status: { [Op.ne]: "cancelled" } }],
+          trade_status: { [Op.notIn]: ["cancelled", "changed"] },
         },
-        // Cover-approved shifts (manager has greenlit the search; not the student's own shift)
+        // Defensive: approved_cover rows where assigned_user_id is still set
         {
           trade_status: "approved_cover",
           assigned_user_id: { [Op.ne]: userId },
@@ -475,7 +644,16 @@ export const getOpenShifts = async (req, res) => {
       ],
     };
 
-    const { count, rows } = await Shift.findAndCountAll({
+    const where = {
+      is_published: true,
+      department_id: { [Op.in]: targetDeptIds },
+      [Op.and]: [dateRangeClause, notExpiredClause, statusClause],
+    };
+
+    // Fetch the whole eligible pool, then drop shifts that conflict with the
+    // student's unavailability (class schedule, manual unavailable blocks,
+    // approved time-off). Paginate after filtering so page counts stay accurate.
+    const eligibleRows = await Shift.findAll({
       where,
       include: [
         { model: Department, as: "department", attributes: ["department_id", "department_name"] },
@@ -483,11 +661,12 @@ export const getOpenShifts = async (req, res) => {
         { model: User, as: "assignedUser", attributes: ["id", "fName", "lName"], required: false },
       ],
       order: [["shift_date", "ASC"], ["start_time", "ASC"]],
-      limit,
-      offset,
     });
 
-    return ok(res, { count, shifts: rows, page, limit });
+    const availableRows = await filterOutUnavailableShifts(userId, eligibleRows);
+    const pagedRows = availableRows.slice(offset, offset + limit);
+
+    return ok(res, { count: availableRows.length, shifts: pagedRows, page, limit });
   } catch (error) {
     logger.error(`[StudentController] getOpenShifts error: ${error.message}`);
     return fail(res, "Error retrieving open shifts.");
@@ -521,8 +700,8 @@ export const claimOpenShift = async (req, res) => {
     }
 
     // For truly unassigned shifts: assigned_user_id must be null.
-    // For cover-approved shifts (trade_status = 'approved_cover'): assigned_user_id is the
-    // original student — this is allowed; the volunteer is requesting to pick it up.
+    // For cover-approved shifts (trade_status = 'approved_cover'): assigned_user_id is also
+    // null (cleared when manager approved the cover request). Both paths are allowed.
     const isCoverApproved = shift.trade_status === "approved_cover";
 
     if (shift.assigned_user_id && !isCoverApproved) {
@@ -575,54 +754,53 @@ export const claimOpenShift = async (req, res) => {
 
     let claimRequest;
 
-    if (isCoverApproved) {
-      // ── COVER-APPROVED flow (Stage 2) ────────────────────────────────────
-      // The shift was posted via find-cover and manager approved it as open.
-      // Volunteer (userId) is now requesting to pick it up.
-      // Reuse the existing SwapRequest record (created in Stage 1).
+    // Look up an existing Stage-1 cover request (created when the original
+    // worker posted for cover and the manager approved it). If one exists,
+    // we reuse it. If not — either this is a truly unassigned shift, or the
+    // cover-approved shift has an orphaned record state — we fall through
+    // to creating a fresh pickup request. We should NEVER 500 here just
+    // because `trade_status='approved_cover'` without a matching swap row;
+    // that would block the student from picking up an otherwise open shift.
+    const existingCoverReq = isCoverApproved
+      ? await ShiftSwapRequest.findOne({
+          where: {
+            requester_shift_id: shiftId,
+            type: "find_cover",
+            status: "accepted",
+          },
+          transaction,
+          lock: transaction.LOCK.UPDATE,
+        })
+      : null;
 
-      const coverSwapReq = await ShiftSwapRequest.findOne({
-        where: {
-          requester_shift_id: shiftId,
-          type: "find_cover",
-          status: "accepted",
-        },
-        transaction,
-        lock: transaction.LOCK.UPDATE,
-      });
-
-      if (!coverSwapReq) {
-        await transaction.rollback();
-        return fail(res, "Cover request record not found. Please try again.", 500);
-      }
-
-      // Prevent duplicate: same volunteer already has a pending pickup for this shift
-      if (coverSwapReq.respondent_user_id === userId) {
+    if (existingCoverReq) {
+      // ── COVER-APPROVED (Stage 2): reuse the Stage-1 record ───────────────
+      // Prevent duplicate: same volunteer already responded to this posting
+      if (existingCoverReq.respondent_user_id === userId) {
         await transaction.rollback();
         return fail(res, "You already have a pending pickup request for this shift.", 409);
       }
 
-      coverSwapReq.respondent_user_id = userId;
-      coverSwapReq.respondent_notes = req.body?.notes || null;
-      coverSwapReq.status = "manager_pending";
-      coverSwapReq.updated_at = new Date();
-      await coverSwapReq.save({ transaction });
+      existingCoverReq.respondent_user_id = userId;
+      existingCoverReq.respondent_notes = req.body?.notes || null;
+      existingCoverReq.status = "manager_pending";
+      existingCoverReq.updated_at = new Date();
+      await existingCoverReq.save({ transaction });
 
-      claimRequest = coverSwapReq;
+      claimRequest = existingCoverReq;
 
       await transaction.commit();
 
-      // Notify the original student that someone wants to take their shift
+      // Notify the original worker that someone wants to take their shift
       sendNotification(
-        coverSwapReq.requester_user_id,
+        existingCoverReq.requester_user_id,
         "Someone Wants to Cover Your Shift",
         `A student has requested to pick up your shift on ${shift.shift_date}. Waiting for manager approval.`,
         { type: "shift_change", link: "/student/schedule" }
       ).catch((err) => logger.error(`Notification error: ${err.message}`));
-
     } else {
-      // ── TRULY UNASSIGNED flow ────────────────────────────────────────────
-      // Original open shift (no assigned_user_id). Student claims it directly.
+      // ── TRULY UNASSIGNED (or orphaned cover-approved): create a new ──────
+      // pickup request with the picker as both requester and respondent.
 
       // Prevent duplicate pending claims from the same user for the same shift.
       const existingClaim = await ShiftSwapRequest.findOne({
@@ -646,7 +824,9 @@ export const claimOpenShift = async (req, res) => {
           respondent_user_id: userId,
           type: "find_cover",
           status: "manager_pending",
-          requester_notes: req.body?.notes || "Open shift claim request",
+          requester_notes:
+            req.body?.notes ||
+            (isCoverApproved ? "Pickup request for open shift" : "Open shift claim request"),
           created_at: new Date(),
           updated_at: new Date(),
         },
@@ -1244,6 +1424,61 @@ export const cancelTimeOff = async (req, res) => {
 // 6. AVAILABILITY
 // ═════════════════════════════════════════════════════════════════════════════
 
+const toTimeString = (value) => String(value || "").slice(0, 8);
+
+const overlapsTime = (startA, endA, startB, endB) =>
+  toMinutes(startA) < toMinutes(endB) && toMinutes(endA) > toMinutes(startB);
+
+const isClassScheduleAvailability = (record) =>
+  record?.sourceType === "class_schedule"
+  || record?.recurrencePattern === "class_schedule"
+  || Boolean(record?.isSystemManaged);
+
+const ensureNoClassTimeOverrides = async ({ userId, entries, transaction }) => {
+  const classBlocks = await Availability.findAll({
+    where: {
+      userId,
+      specificDate: null,
+      isRecurring: true,
+      [Op.or]: [
+        { sourceType: "class_schedule" },
+        { recurrencePattern: "class_schedule" },
+        { isSystemManaged: true },
+      ],
+    },
+    transaction,
+  });
+
+  const classByDay = new Map();
+  for (const rec of classBlocks) {
+    const day = Number(rec.dayOfWeek);
+    if (!classByDay.has(day)) classByDay.set(day, []);
+    classByDay.get(day).push({
+      startTime: toTimeString(rec.startTime),
+      endTime: toTimeString(rec.endTime),
+    });
+  }
+
+  for (const entry of entries) {
+    const type = String(entry.availabilityType || "available").toLowerCase();
+    if (!["available", "preferred"].includes(type)) continue;
+    const day = Number(entry.dayOfWeek);
+    const classWindows = classByDay.get(day) || [];
+    for (const classWindow of classWindows) {
+      if (overlapsTime(entry.startTime, entry.endTime, classWindow.startTime, classWindow.endTime)) {
+        return {
+          conflict: true,
+          dayOfWeek: day,
+          startTime: entry.startTime,
+          endTime: entry.endTime,
+        };
+      }
+    }
+  }
+
+  return { conflict: false };
+};
+
 /**
  * GET /api/student/availability
  *
@@ -1265,6 +1500,238 @@ export const getMyAvailability = async (req, res) => {
   } catch (error) {
     logger.error(`[StudentController] getMyAvailability error: ${error.message}`);
     return fail(res, "Error retrieving availability.");
+  }
+};
+
+/**
+ * GET /api/student/availability/class-sync-status
+ */
+export const getClassScheduleSyncStatus = async (req, res) => {
+  try {
+    const userId = await resolveUserIdFromAuth(req.auth);
+
+    if (!userId) {
+      return fail(res, "User not found.", 404);
+    }
+
+    const whereClassBlocks = {
+      userId,
+      specificDate: null,
+      isRecurring: true,
+      [Op.or]: [
+        { sourceType: "class_schedule" },
+        { recurrencePattern: "class_schedule" },
+        { isSystemManaged: true },
+      ],
+    };
+
+    const classBlockCount = await Availability.count({ where: whereClassBlocks });
+
+    if (classBlockCount <= 0) {
+      return ok(res, {
+        lastSyncedAt: null,
+        status: "never_synced",
+        termCode: null,
+        totalClassBlocks: 0,
+        updated: 0,
+        error: null,
+      });
+    }
+
+    const latestClassRecord = await Availability.findOne({
+      where: whereClassBlocks,
+      attributes: ["syncBatchId", "updatedAt"],
+      order: [["updatedAt", "DESC"]],
+    });
+
+    const latestSyncBatchId = latestClassRecord?.syncBatchId || null;
+    const lastSyncedAt = latestClassRecord?.updatedAt || null;
+
+    const termFromBatchMatch = latestSyncBatchId
+      ? String(latestSyncBatchId).match(/^class-sync-\d+-(.+)-\d+$/)
+      : null;
+    const termCode = termFromBatchMatch?.[1] || null;
+
+    const updated = latestSyncBatchId
+      ? await Availability.count({
+        where: {
+          ...whereClassBlocks,
+          syncBatchId: latestSyncBatchId,
+        },
+      })
+      : 0;
+
+    return ok(res, {
+      lastSyncedAt,
+      status: "success",
+      termCode,
+      totalClassBlocks: classBlockCount,
+      updated,
+      error: null,
+    });
+  } catch (error) {
+    logger.error(`[StudentController] getClassScheduleSyncStatus error: ${error.message}`);
+    return fail(res, "Failed to retrieve class sync status.", 500);
+  }
+};
+
+/**
+ * POST /api/student/availability/sync-class-schedule
+ *
+ * Sync student's class meetings into recurring unavailable availability blocks.
+ * Existing class-schedule generated blocks are replaced atomically.
+ * Manual availability blocks are preserved.
+ */
+export const syncClassScheduleAvailability = async (req, res) => {
+  const transaction = await db.sequelize.transaction();
+  try {
+    const userId = await resolveUserIdFromAuth(req.auth, { transaction });
+    const studentEmail = req.auth.email;
+
+    if (!studentEmail) {
+      await transaction.rollback();
+      return fail(res, "Student email not found. Cannot sync class schedule.", 400);
+    }
+
+    if (!userId) {
+      await transaction.rollback();
+      return fail(res, "Could not resolve user account. Please log out and back in.", 400);
+    }
+
+    const { termCode } = req.body || {};
+    const { payload, termCode: resolvedTermCode } = await fetchStudentSchedule({
+      email: studentEmail,
+      termCode,
+    });
+
+    const sanitizedTermCode = String(resolvedTermCode || "unknown")
+      .replace(/[^a-zA-Z0-9_-]/g, "")
+      .slice(0, 32) || "unknown";
+    const syncBatchId = `class-sync-${userId}-${sanitizedTermCode}-${Date.now()}`;
+    const syncTimestamp = new Date();
+
+    const desiredBlocks = normalizeScheduleToAvailabilityBlocks(payload).map((block) => ({
+      ...block,
+      userId,
+      specificDate: null,
+      syncBatchId,
+    }));
+
+    const existingClassRecords = await Availability.findAll({
+      where: {
+        userId,
+        specificDate: null,
+        isRecurring: true,
+        [Op.or]: [
+          { sourceType: "class_schedule" },
+          { recurrencePattern: "class_schedule" },
+          { isSystemManaged: true },
+        ],
+      },
+      transaction,
+    });
+
+    const makeSignature = (entry) => {
+      const dayOfWeek = Number(entry.dayOfWeek);
+      const startTime = String(entry.startTime || "").slice(0, 8);
+      const endTime = String(entry.endTime || "").slice(0, 8);
+      const availabilityType = String(entry.availabilityType || "available");
+      const sourceType = String(entry.sourceType || "class_schedule");
+      const sourceRef = String(entry.sourceRef || "");
+      return [dayOfWeek, startTime, endTime, availabilityType, sourceType, sourceRef].join("|");
+    };
+
+    const existingBySignature = new Map();
+    const duplicateExistingIds = [];
+
+    for (const rec of existingClassRecords) {
+      const signature = makeSignature(rec);
+      if (existingBySignature.has(signature)) {
+        duplicateExistingIds.push(rec.id);
+        continue;
+      }
+      existingBySignature.set(signature, rec);
+    }
+
+    const desiredBySignature = new Map();
+    for (const block of desiredBlocks) {
+      const signature = makeSignature(block);
+      if (!desiredBySignature.has(signature)) {
+        desiredBySignature.set(signature, block);
+      }
+    }
+
+    const toCreate = [];
+    const matchedExistingIds = [];
+    let unchanged = 0;
+    for (const [signature, block] of desiredBySignature.entries()) {
+      const matched = existingBySignature.get(signature);
+      if (matched) {
+        unchanged += 1;
+        matchedExistingIds.push(matched.id);
+      } else {
+        toCreate.push(block);
+      }
+    }
+
+    const toDeleteIds = [
+      ...duplicateExistingIds,
+      ...existingClassRecords
+        .filter((rec) => !desiredBySignature.has(makeSignature(rec)))
+        .map((rec) => rec.id),
+    ];
+
+    if (toDeleteIds.length > 0) {
+      await Availability.destroy({
+        where: { id: toDeleteIds },
+        transaction,
+      });
+    }
+
+    if (toCreate.length > 0) {
+      await Availability.bulkCreate(toCreate, { transaction });
+    }
+
+    let updated = 0;
+    if (matchedExistingIds.length > 0) {
+      const [updatedCount] = await Availability.update(
+        {
+          sourceType: "class_schedule",
+          recurrencePattern: "class_schedule",
+          isSystemManaged: true,
+          syncBatchId,
+          updatedAt: syncTimestamp,
+        },
+        {
+          where: { id: matchedExistingIds },
+          transaction,
+        }
+      );
+      updated = Number(updatedCount) || 0;
+    }
+
+    await transaction.commit();
+
+    return ok(
+      res,
+      {
+        synced: true,
+        termCode: resolvedTermCode,
+        syncBatchId,
+        lastSyncedAt: syncTimestamp.toISOString(),
+        created: toCreate.length,
+        updated,
+        deleted: toDeleteIds.length,
+        unchanged,
+      },
+      "Class schedule synced into availability."
+    );
+  } catch (error) {
+    await transaction.rollback();
+    logger.error(`[StudentController] syncClassScheduleAvailability error: ${error.message}`);
+    const status = Number(error?.statusCode || error?.status || 502);
+    const message = error?.message || "Failed to sync class schedule into availability.";
+    return fail(res, message, status >= 400 ? status : 502);
   }
 };
 
@@ -1306,6 +1773,20 @@ export const updateMyAvailability = async (req, res) => {
         await transaction.rollback();
         return fail(res, `availabilityType must be one of: ${validTypes.join(", ")}`, 400);
       }
+    }
+
+    const classOverrideCheck = await ensureNoClassTimeOverrides({
+      userId,
+      entries,
+      transaction,
+    });
+    if (classOverrideCheck.conflict) {
+      await transaction.rollback();
+      return fail(
+        res,
+        `Availability overlaps locked class time on day ${classOverrideCheck.dayOfWeek} (${classOverrideCheck.startTime}-${classOverrideCheck.endTime}).`,
+        409
+      );
     }
 
     // Remove existing recurring availability (keep specific-date overrides)
@@ -1685,7 +2166,7 @@ export const getTimesheet = async (req, res) => {
 
     const entries = clockRecords.map((cr) => {
       const breaks = breaksByClockId[cr.clock_id] || [];
-      const breakMins = breaks.reduce((sum, b) => {
+      const breakMinsRaw = breaks.reduce((sum, b) => {
         if (b.break_start && b.break_end) {
           return sum + Math.round(
             (new Date(b.break_end).getTime() - new Date(b.break_start).getTime()) / 60000
@@ -1694,9 +2175,13 @@ export const getTimesheet = async (req, res) => {
         return sum;
       }, 0);
 
-      const workedMins = cr.clock_out
+      const workedMinsRaw = cr.clock_out
         ? Math.round((new Date(cr.clock_out).getTime() - new Date(cr.clock_in).getTime()) / 60000)
         : Math.round((Date.now() - new Date(cr.clock_in).getTime()) / 60000);
+
+      const workedMins = Math.max(0, workedMinsRaw);
+      const breakMins = Math.max(0, Math.min(breakMinsRaw, workedMins));
+      const netMins = Math.max(0, workedMins - breakMins);
 
       const scheduledMins = cr.shift
         ? Math.max(0, toMinutes(cr.shift.end_time) - toMinutes(cr.shift.start_time))
@@ -1715,7 +2200,16 @@ export const getTimesheet = async (req, res) => {
         scheduledEnd: cr.shift?.end_time || null,
         workedMinutes: workedMins,
         breakMinutes: breakMins,
-        netMinutes: workedMins - breakMins,
+        netMinutes: netMins,
+        // Backward-compatible aliases used by some clients/views
+        clock_in: cr.clock_in,
+        clock_out: cr.clock_out,
+        scheduled_start: cr.shift?.start_time || null,
+        scheduled_end: cr.shift?.end_time || null,
+        break_minutes: breakMins,
+        worked_minutes: workedMins,
+        net_minutes: netMins,
+        total_hours: +(netMins / 60).toFixed(2),
         department: cr.shift?.department || null,
         position: cr.shift?.position || null,
         breaks,
@@ -1727,9 +2221,9 @@ export const getTimesheet = async (req, res) => {
       summary: {
         totalWorkedMinutes,
         totalBreakMinutes,
-        totalNetMinutes: totalWorkedMinutes - totalBreakMinutes,
+        totalNetMinutes: Math.max(0, totalWorkedMinutes - totalBreakMinutes),
         totalWorkedHours: +(totalWorkedMinutes / 60).toFixed(1),
-        totalNetHours: +((totalWorkedMinutes - totalBreakMinutes) / 60).toFixed(1),
+        totalNetHours: +(Math.max(0, totalWorkedMinutes - totalBreakMinutes) / 60).toFixed(1),
         totalScheduledMinutes,
         totalScheduledHours: +(totalScheduledMinutes / 60).toFixed(1),
       },

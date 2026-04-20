@@ -36,6 +36,47 @@ const validateTimeRange = (startTime, endTime) => {
   return { valid: true };
 };
 
+const normalizeDayOfWeek = (dayOfWeekValue) => {
+  if (dayOfWeekValue === undefined || dayOfWeekValue === null || dayOfWeekValue === "") {
+    return null;
+  }
+
+  const normalized = Number(dayOfWeekValue);
+  if (!Number.isInteger(normalized) || normalized < 0 || normalized > 6) {
+    return null;
+  }
+  return normalized;
+};
+
+const deriveDayOfWeek = (specificDate) => {
+  if (!specificDate) return null;
+  const date = new Date(`${specificDate}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.getDay();
+};
+
+const hasClassScheduleConflict = async ({ userId, dayOfWeek, startTime, endTime }) => {
+  if (dayOfWeek === null || dayOfWeek === undefined) return false;
+  const conflict = await Availability.findOne({
+    where: {
+      userId,
+      dayOfWeek,
+      specificDate: null,
+      isRecurring: true,
+      [Op.or]: [
+        { sourceType: "class_schedule" },
+        { recurrencePattern: "class_schedule" },
+        { isSystemManaged: true },
+      ],
+      [Op.and]: [
+        { startTime: { [Op.lt]: normalizeTime(endTime) } },
+        { endTime: { [Op.gt]: normalizeTime(startTime) } },
+      ],
+    },
+  });
+  return Boolean(conflict);
+};
+
 const hasAvailabilityConflict = async ({
   userId,
   startTime,
@@ -156,11 +197,23 @@ exports.create = async (req, res) => {
     return;
   }
 
+  const normalizedDayOfWeek = normalizeDayOfWeek(req.body.dayOfWeek);
+  if (
+    req.body.dayOfWeek !== undefined
+    && req.body.dayOfWeek !== null
+    && req.body.dayOfWeek !== ""
+    && normalizedDayOfWeek === null
+  ) {
+    return res.status(400).send({
+      message: "dayOfWeek must be an integer between 0 (Sunday) and 6 (Saturday).",
+    });
+  }
+
   // Create an Availability
   const availability = {
     userId: req.body.userId,
     departmentId: req.body.departmentId || null,
-    dayOfWeek: req.body.dayOfWeek || null,
+    dayOfWeek: normalizedDayOfWeek,
     startTime: normalizeTime(req.body.startTime),
     endTime: normalizeTime(req.body.endTime),
     availabilityType: req.body.availabilityType || 'available',
@@ -193,6 +246,32 @@ exports.create = async (req, res) => {
           "Availability overlaps with an existing record. Please choose a non-conflicting time range.",
       });
       return;
+    }
+
+    const resolvedDayOfWeek =
+      availability.dayOfWeek ?? deriveDayOfWeek(availability.specificDate);
+
+    const shouldGuardClassTime =
+      (availability.availabilityType === "available" || availability.availabilityType === "preferred")
+      && !(
+        availability.sourceType === "class_schedule"
+        || availability.recurrencePattern === "class_schedule"
+        || availability.isSystemManaged
+      );
+
+    if (shouldGuardClassTime) {
+      const classConflict = await hasClassScheduleConflict({
+        userId: availability.userId,
+        dayOfWeek: resolvedDayOfWeek,
+        startTime: availability.startTime,
+        endTime: availability.endTime,
+      });
+
+      if (classConflict) {
+        return res.status(409).send({
+          message: "Availability overlaps with locked class schedule time.",
+        });
+      }
     }
 
     const data = await Availability.create(availability);
@@ -390,8 +469,22 @@ exports.update = async (req, res) => {
       req.body.specificDate !== undefined
         ? req.body.specificDate
         : existing.specificDate;
+    const normalizedRequestedDayOfWeek =
+      req.body.dayOfWeek !== undefined
+        ? normalizeDayOfWeek(req.body.dayOfWeek)
+        : undefined;
+    if (
+      req.body.dayOfWeek !== undefined
+      && req.body.dayOfWeek !== null
+      && req.body.dayOfWeek !== ""
+      && normalizedRequestedDayOfWeek === null
+    ) {
+      return res.status(400).send({
+        message: "dayOfWeek must be an integer between 0 (Sunday) and 6 (Saturday).",
+      });
+    }
     const effectiveDayOfWeek =
-      req.body.dayOfWeek !== undefined ? req.body.dayOfWeek : existing.dayOfWeek;
+      req.body.dayOfWeek !== undefined ? normalizedRequestedDayOfWeek : existing.dayOfWeek;
     const effectiveUserId = req.body.userId || existing.userId;
 
     const timeValidation = validateTimeRange(effectiveStartTime, effectiveEndTime);
@@ -422,6 +515,9 @@ exports.update = async (req, res) => {
     }
 
     const updatePayload = { ...req.body };
+    if (updatePayload.dayOfWeek !== undefined) {
+      updatePayload.dayOfWeek = normalizeDayOfWeek(updatePayload.dayOfWeek);
+    }
     if (updatePayload.startTime) {
       updatePayload.startTime = normalizeTime(updatePayload.startTime);
     }

@@ -32,6 +32,13 @@ const Position = SequelizeInstance.define(
       defaultValue: false,
       field: "is_critical"
     },
+    // Hex color used to visually identify this position on the manager schedule
+    color: {
+      type: DataTypes.STRING(7),
+      allowNull: true,
+      defaultValue: null,
+      field: "color"
+    },
     created_at: {
       type: DataTypes.DATE,
       allowNull: false,

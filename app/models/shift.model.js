@@ -94,6 +94,11 @@ const Shift = SequelizeInstance.define(
       allowNull: true,
       field: "recurrence_end_date"
     },
+    task_list_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: "task_list_id"
+    },
     created_at: {
       type: DataTypes.DATE,
       allowNull: false,

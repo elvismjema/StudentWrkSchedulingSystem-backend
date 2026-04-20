@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 const mockCreate = jest.fn();
 const mockFindAll = jest.fn();
 const mockFindByPk = jest.fn();
@@ -5,7 +6,7 @@ const mockFindOne = jest.fn();
 const mockUpdate = jest.fn();
 const mockDestroy = jest.fn();
 
-jest.mock("../../app/models/index.js", () => ({
+jest.mock("app/models/index.js", () => ({
   __esModule: true,
   default: {
     availability: {
@@ -30,7 +31,7 @@ jest.mock("../../app/models/index.js", () => ({
   },
 }));
 
-jest.mock("../../app/config/logger.js", () => ({
+jest.mock("app/config/logger.js", () => ({
   __esModule: true,
   default: {
     info: jest.fn(),
@@ -40,7 +41,7 @@ jest.mock("../../app/config/logger.js", () => ({
   },
 }));
 
-const availabilityController = require("../../app/controllers/availability.controller.js").default;
+import availabilityController from "app/controllers/availability.controller.js";
 
 const mockReq = (body = {}, params = {}, query = {}) => ({
   body,

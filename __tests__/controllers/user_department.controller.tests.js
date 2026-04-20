@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 const mockDeptFindAll = jest.fn();
 const mockDeptFindByPk = jest.fn();
 const mockUdCreate = jest.fn();
@@ -5,7 +6,7 @@ const mockUdFindOne = jest.fn();
 const mockUdFindAll = jest.fn();
 const mockUdFindByPk = jest.fn();
 
-jest.mock("../../app/models/index.js", () => ({
+jest.mock("app/models/index.js", () => ({
   __esModule: true,
   default: {
     department: {
@@ -21,13 +22,13 @@ jest.mock("../../app/models/index.js", () => ({
   },
 }));
 
-const controller = require("../../app/controllers/user_department.controller.js");
+import controller from "app/controllers/user_department.controller.js";
 const {
   listAvailableDepartments,
   submitJoinRequest,
   listUserDepartments,
   leaveDepar,
-} = controller.default || controller;
+} = controller;
 
 const mockReq = (body = {}, params = {}, query = {}) => ({
   body,

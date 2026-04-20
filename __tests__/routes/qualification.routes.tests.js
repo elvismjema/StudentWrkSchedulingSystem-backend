@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 const mockVerifyToken = jest.fn((req, res, next) => next());
 const mockRequireManager = jest.fn((req, res, next) => next());
 
@@ -13,22 +14,22 @@ const mockQualificationController = {
   reviewQualificationDocument: jest.fn(),
 };
 
-jest.mock("../../app/middleware/authJwt.js", () => ({
+jest.mock("app/middleware/authJwt.js", () => ({
   __esModule: true,
   verifyToken: mockVerifyToken,
 }));
 
-jest.mock("../../app/authorization/requireManager.js", () => ({
+jest.mock("app/authorization/requireManager.js", () => ({
   __esModule: true,
   default: mockRequireManager,
 }));
 
-jest.mock("../../app/controllers/qualification.controller.js", () => ({
+jest.mock("app/controllers/qualification.controller.js", () => ({
   __esModule: true,
   ...mockQualificationController,
 }));
 
-const router = require("../../app/routes/qualification.routes.js").default;
+import router from "app/routes/qualification.routes.js";
 
 describe("qualification routes middleware", () => {
   it("protects manager review endpoints with auth and manager middleware", () => {
