@@ -2231,7 +2231,7 @@ export const getTimesheet = async (req, res) => {
 
       return {
         clockRecordId: cr.clock_id,
-        date: new Date(cr.clock_in).toISOString().split("T")[0],
+        date: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date(cr.clock_in)),
         clockIn: cr.clock_in,
         clockOut: cr.clock_out,
         scheduledStart: cr.shift?.start_time || null,
