@@ -717,6 +717,9 @@ export const listShifts = async (req, res) => {
   try {
     const { department_id, assigned_user_id, is_published, shift_date, shift_status } = req.query;
     const where = {};
+    const authUserId = Number(req.auth?.userId);
+    const requestedAssignedUserId = assigned_user_id ? Number(assigned_user_id) : null;
+    let activeDepartmentId = null;
 
     // If no department_id specified and user is a student, use their active department
     if (!department_id && req.auth && req.auth.userId) {
@@ -724,11 +727,30 @@ export const listShifts = async (req, res) => {
       const activeDepartment = await getStudentActiveDepartment(req.auth.userId);
       
       if (activeDepartment) {
-        where.department_id = activeDepartment.department_id;
-        console.log(`Auto-filtering shifts by student's active department: ${activeDepartment.department_id}`);
+        activeDepartmentId = Number(activeDepartment.department_id);
+        where.department_id = activeDepartmentId;
+        console.log(`Auto-filtering shifts by student's active department: ${activeDepartmentId}`);
       }
     } else {
       if (department_id) where.department_id = department_id;
+    }
+
+    if (requestedAssignedUserId && requestedAssignedUserId === authUserId) {
+      if (!activeDepartmentId) {
+        const { getStudentActiveDepartment } = await import('./user_department.controller.js');
+        const activeDepartment = await getStudentActiveDepartment(authUserId);
+        activeDepartmentId = activeDepartment ? Number(activeDepartment.department_id) : null;
+      }
+
+      if (!activeDepartmentId) {
+        return res.send([]);
+      }
+
+      if (department_id && Number(department_id) !== activeDepartmentId) {
+        return res.send([]);
+      }
+
+      where.department_id = activeDepartmentId;
     }
     
     if (assigned_user_id) where.assigned_user_id = assigned_user_id;

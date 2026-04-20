@@ -262,6 +262,10 @@ exports.createPendingAssignment = async (req, res) => {
       if (existingMembership) {
         existingMembership.role_id = roleId;
         existingMembership.position_id = positionId;
+        existingMembership.is_active = true;
+        existingMembership.request_status = "approved";
+        existingMembership.deactivated_at = null;
+        existingMembership.assigned_at = new Date();
         await existingMembership.save();
       } else {
         await UserDepartment.create({
@@ -610,6 +614,10 @@ exports.assignDepartment = async (req, res) => {
     if (membership) {
       membership.role_id = roleId;
       if (positionId !== null) membership.position_id = positionId;
+      membership.is_active = true;
+      membership.request_status = "approved";
+      membership.deactivated_at = null;
+      membership.assigned_at = new Date();
       await membership.save();
     } else {
       membership = await UserDepartment.create({
