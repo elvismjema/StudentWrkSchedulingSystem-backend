@@ -1,6 +1,7 @@
 import db from "../models/index.js";
 import { Op } from "sequelize";
 import { sendNotification } from "../services/notificationService.js";
+import logger from "../config/logger.js";
 
 const Shift = db.shift;
 const UserDepartment = db.userDepartment;
@@ -9,9 +10,6 @@ const ShiftAcknowledgement = db.shiftAcknowledgement;
 const ShiftAudit = db.shiftAudit;
 const User = db.user;
 const TimeOffRequest = db.timeOffRequest;
-const Qualification = db.qualification;
-const UserQualification = db.userQualification;
-const PositionQualification = db.positionQualification;
 
 const SHIFT_STATUS = {
   DRAFT: "draft",
@@ -35,15 +33,58 @@ const shiftIncludes = [
   },
 ];
 
+// Normalize a time value (TIME column, "HH:MM", "HH:MM:SS", or Date) into
+// minutes-since-midnight. Returns null on garbage input so callers can bail
+// out safely instead of silently passing validation.
 const toMinutes = (timeValue) => {
-  const [hours, minutes] = String(timeValue || "00:00").split(":").map(Number);
-  return (hours * 60) + (minutes || 0);
+  if (timeValue == null) return null;
+  const text = String(timeValue).trim();
+  if (!text) return null;
+  const parts = text.split(":");
+  const hours = Number(parts[0]);
+  const minutes = Number(parts[1] || 0);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  return (hours * 60) + minutes;
+};
+
+// Coerce Sequelize DATEONLY (string), ISO string, or Date to "YYYY-MM-DD".
+// Returns null if we can't derive a valid local date (caller should treat
+// that as a validation failure rather than a pass).
+const toIsoDate = (dateValue) => {
+  if (dateValue == null) return null;
+  if (dateValue instanceof Date) {
+    if (Number.isNaN(dateValue.getTime())) return null;
+    const y = dateValue.getFullYear();
+    const m = String(dateValue.getMonth() + 1).padStart(2, "0");
+    const d = String(dateValue.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  const text = String(dateValue).trim();
+  if (!text) return null;
+  // Accept "YYYY-MM-DD" directly.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  // Accept "YYYY-MM-DDTHH:MM..." by slicing the date portion.
+  const match = text.match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : null;
 };
 
 const getDayOfWeekFromDate = (dateValue) => {
-  const date = new Date(`${dateValue}T00:00:00`);
+  const iso = toIsoDate(dateValue);
+  if (!iso) return null;
+  const date = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
   return date.getDay();
 };
+
+// Shared Op.or fragment: every place in the codebase that identifies a
+// class-schedule-derived availability row checks all three markers. Mirror
+// that here so we never silently miss class rows written by older code
+// paths that only stamped one or two of the fields.
+const CLASS_SCHEDULE_MARKERS = [
+  { sourceType: "class_schedule" },
+  { recurrencePattern: "class_schedule" },
+  { isSystemManaged: true },
+];
 
 const deriveShiftStatus = (shift) => {
   if (shift?.trade_status === SHIFT_STATUS.CANCELLED) {
@@ -205,64 +246,28 @@ const validateDepartmentMembership = async (departmentId, userId, positionId) =>
   return { valid: true };
 };
 
-const validateAvailabilityCoverage = async (userId, shiftDate, startTime, endTime) => {
-  if (!shiftDate) {
-    return { valid: true };
-  }
-
-  const dayOfWeek = getDayOfWeekFromDate(shiftDate);
-  const shiftStart = toMinutes(startTime);
-  const shiftEnd = toMinutes(endTime);
-
-  const availabilityRecords = await Availability.findAll({
-    where: {
-      userId,
-      availabilityType: {
-        [Op.in]: ["available", "preferred"],
-      },
-      requestStatus: {
-        [Op.in]: ["approved", "pending"],
-      },
-      [Op.or]: [
-        { specificDate: shiftDate },
-        { dayOfWeek, isRecurring: true },
-      ],
-    },
-  });
-
-  if (!availabilityRecords.length) {
-    return {
-      valid: false,
-      message: "Assigned user has no availability record for this shift date/time.",
-      conflictType: "availability_conflict",
-    };
-  }
-
-  const hasCoverage = availabilityRecords.some((availability) => {
-    const availabilityStart = toMinutes(availability.startTime);
-    const availabilityEnd = toMinutes(availability.endTime);
-    return availabilityStart <= shiftStart && availabilityEnd >= shiftEnd;
-  });
-
-  if (!hasCoverage) {
-    return {
-      valid: false,
-      message: "Assigned user availability does not fully cover this shift window.",
-      conflictType: "availability_conflict",
-    };
-  }
-
-  return { valid: true };
-};
+// NOTE: A previous `validateAvailabilityCoverage` helper that required
+// students to have an affirmative "available"/"preferred" record covering
+// the full shift window was removed. Product rule is default-allow: a
+// manager can assign a shift UNLESS the student has a class, unavailable
+// window, or approved time-off overlapping the shift. Requiring an
+// opt-in availability row contradicted that rule and was never wired up.
 
 const validateNoUnavailableConflicts = async (userId, shiftDate, startTime, endTime) => {
-  if (!shiftDate) {
-    return { valid: true };
-  }
-
+  const isoDate = toIsoDate(shiftDate);
   const dayOfWeek = getDayOfWeekFromDate(shiftDate);
   const shiftStart = toMinutes(startTime);
   const shiftEnd = toMinutes(endTime);
+
+  // If we can't resolve the shift window, refuse to assert it's free.
+  // Callers should treat this as a validation failure, not a pass.
+  if (!isoDate || dayOfWeek === null || shiftStart === null || shiftEnd === null) {
+    return {
+      valid: false,
+      message: "Unable to validate availability: shift date or time is invalid.",
+      conflictType: "invalid_shift_window",
+    };
+  }
 
   const blockedRecords = await Availability.findAll({
     where: {
@@ -270,7 +275,7 @@ const validateNoUnavailableConflicts = async (userId, shiftDate, startTime, endT
       availabilityType: "unavailable",
       requestStatus: "approved",
       [Op.or]: [
-        { specificDate: shiftDate },
+        { specificDate: isoDate },
         { dayOfWeek, isRecurring: true },
       ],
     },
@@ -279,6 +284,7 @@ const validateNoUnavailableConflicts = async (userId, shiftDate, startTime, endT
   const hasConflict = blockedRecords.some((availability) => {
     const blockedStart = toMinutes(availability.startTime);
     const blockedEnd = toMinutes(availability.endTime);
+    if (blockedStart === null || blockedEnd === null) return false;
     return intervalsOverlap(shiftStart, shiftEnd, blockedStart, blockedEnd);
   });
 
@@ -294,25 +300,29 @@ const validateNoUnavailableConflicts = async (userId, shiftDate, startTime, endT
 };
 
 const validateClassScheduleConflict = async (userId, shiftDate, startTime, endTime) => {
-  if (!shiftDate) return { valid: true };
-
+  const isoDate = toIsoDate(shiftDate);
   const dayOfWeek = getDayOfWeekFromDate(shiftDate);
   const shiftStart = toMinutes(startTime);
   const shiftEnd = toMinutes(endTime);
+
+  if (!isoDate || dayOfWeek === null || shiftStart === null || shiftEnd === null) {
+    return {
+      valid: false,
+      message: "Unable to validate class schedule: shift date or time is invalid.",
+      conflictType: "invalid_shift_window",
+    };
+  }
 
   const classRecords = await Availability.findAll({
     where: {
       userId,
       [Op.and]: [
+        // Widened: match every class-schedule marker the rest of the app
+        // writes/checks (sourceType, recurrencePattern, isSystemManaged).
+        { [Op.or]: CLASS_SCHEDULE_MARKERS },
         {
           [Op.or]: [
-            { sourceType: "class_schedule" },
-            { isSystemManaged: true },
-          ],
-        },
-        {
-          [Op.or]: [
-            { specificDate: shiftDate },
+            { specificDate: isoDate },
             { dayOfWeek, isRecurring: true },
           ],
         },
@@ -323,6 +333,7 @@ const validateClassScheduleConflict = async (userId, shiftDate, startTime, endTi
   const hasConflict = classRecords.some((record) => {
     const classStart = toMinutes(record.startTime);
     const classEnd = toMinutes(record.endTime);
+    if (classStart === null || classEnd === null) return false;
     return intervalsOverlap(shiftStart, shiftEnd, classStart, classEnd);
   });
 
@@ -338,14 +349,21 @@ const validateClassScheduleConflict = async (userId, shiftDate, startTime, endTi
 };
 
 const validateApprovedTimeOffCoverage = async (userId, shiftDate) => {
-  if (!shiftDate) return { valid: true };
+  const isoDate = toIsoDate(shiftDate);
+  if (!isoDate) {
+    return {
+      valid: false,
+      message: "Unable to validate time-off: shift date is invalid.",
+      conflictType: "invalid_shift_window",
+    };
+  }
 
   const blockingRequest = await TimeOffRequest.findOne({
     where: {
       user_id: userId,
       status: "approved",
-      start_date: { [Op.lte]: shiftDate },
-      end_date: { [Op.gte]: shiftDate },
+      start_date: { [Op.lte]: isoDate },
+      end_date: { [Op.gte]: isoDate },
     },
   });
 
@@ -372,12 +390,24 @@ const validateAssignmentEligibility = async (
     return { valid: true };
   }
 
+  // Short, structured context for every decision; makes it possible to
+  // reconstruct why a given assignment passed or failed from the logs.
+  const ctx = {
+    assignedUserId,
+    departmentId,
+    positionId,
+    shiftDate: toIsoDate(shiftDate),
+    startTime,
+    endTime,
+  };
+
   const departmentValidation = await validateDepartmentMembership(
     departmentId,
     assignedUserId,
     positionId,
   );
   if (!departmentValidation.valid) {
+    logger.info("[ShiftAssign] blocked: department", { ...ctx, reason: departmentValidation.conflictType });
     return departmentValidation;
   }
 
@@ -386,6 +416,7 @@ const validateAssignmentEligibility = async (
     shiftDate,
   );
   if (!timeOffValidation.valid) {
+    logger.info("[ShiftAssign] blocked: time_off", { ...ctx, reason: timeOffValidation.conflictType });
     return timeOffValidation;
   }
 
@@ -396,6 +427,7 @@ const validateAssignmentEligibility = async (
     endTime,
   );
   if (!classScheduleValidation.valid) {
+    logger.info("[ShiftAssign] blocked: class_schedule", { ...ctx, reason: classScheduleValidation.conflictType });
     return classScheduleValidation;
   }
 
@@ -406,9 +438,11 @@ const validateAssignmentEligibility = async (
     endTime,
   );
   if (!unavailabilityValidation.valid) {
+    logger.info("[ShiftAssign] blocked: unavailable", { ...ctx, reason: unavailabilityValidation.conflictType });
     return unavailabilityValidation;
   }
 
+  logger.info("[ShiftAssign] allowed", ctx);
   return { valid: true };
 };
 
@@ -1443,147 +1477,12 @@ export const previewShifts = async (req, res) => {
   }
 };
 
-// Assign user to shift with qualification validation
-export const assignUserToShift = async (req, res) => {
-  try {
-    const { shiftId } = req.params;
-    const { user_id } = req.body;
-
-    // Validate request
-    if (!user_id) {
-      return res.status(400).send({
-        message: "Missing required field: user_id"
-      });
-    }
-
-    // Find the shift
-    const shift = await Shift.findByPk(shiftId, {
-      include: [
-        { model: db.position, as: 'position' }
-      ]
-    });
-
-    if (!shift) {
-      return res.status(404).send({
-        message: "Shift not found."
-      });
-    }
-
-    // Verify the user exists and is a student
-    const user = await User.findByPk(user_id);
-    if (!user) {
-      return res.status(404).send({
-        message: "User not found."
-      });
-    }
-
-    if (user.role !== 'student') {
-      return res.status(400).send({
-        message: "Only students can be assigned to shifts."
-      });
-    }
-
-    // Get required qualifications for the position
-    const requiredQualifications = await PositionQualification.findAll({
-      where: { position_id: shift.position_id },
-      include: [
-        {
-          model: Qualification,
-          as: 'qualification',
-          attributes: ['qualification_id', 'qualification_name']
-        }
-      ]
-    });
-
-    if (requiredQualifications.length === 0) {
-      // No qualifications required, assign directly
-      const updatedShift = await Shift.update(
-        { assigned_user_id: user_id },
-        { 
-          where: { shift_id: shiftId },
-          returning: true
-        }
-      );
-
-      res.status(200).send({
-        message: "User assigned to shift successfully.",
-        shift: updatedShift[0]
-      });
-      return;
-    }
-
-    // Get user's qualifications
-    const userQualifications = await UserQualification.findAll({
-      where: { user_id: user_id },
-      include: [
-        {
-          model: Qualification,
-          as: 'qualification',
-          attributes: ['qualification_id', 'qualification_name']
-        }
-      ]
-    });
-
-    // Check qualification requirements
-    const missingQualifications = [];
-    const notApprovedQualifications = [];
-
-    for (const requiredQual of requiredQualifications) {
-      const userQual = userQualifications.find(uq => uq.qualification_id === requiredQual.qualification_id);
-      
-      if (!userQual) {
-        missingQualifications.push({
-          qualification_id: requiredQual.qualification.qualification_id,
-          qualification_name: requiredQual.qualification.qualification_name
-        });
-      } else if (userQual.approval_status !== 'APPROVED') {
-        notApprovedQualifications.push({
-          qualification_id: requiredQual.qualification.qualification_id,
-          qualification_name: requiredQual.qualification.qualification_name,
-          approval_status: userQual.approval_status
-        });
-      }
-    }
-
-    if (missingQualifications.length > 0 || notApprovedQualifications.length > 0) {
-      let message = 'Student cannot be assigned to this shift.';
-      
-      if (missingQualifications.length > 0 && notApprovedQualifications.length > 0) {
-        message = `Missing ${missingQualifications.length} qualification(s) and ${notApprovedQualifications.length} qualification(s) not approved.`;
-      } else if (missingQualifications.length > 0) {
-        message = `Missing ${missingQualifications.length} required qualification(s).`;
-      } else {
-        message = `${notApprovedQualifications.length} qualification(s) not approved.`;
-      }
-
-      return res.status(400).send({
-        message,
-        missingQualifications,
-        notApprovedQualifications
-      });
-    }
-
-    // All qualifications met, assign user to shift
-    const updatedShift = await Shift.update(
-      { assigned_user_id: user_id },
-      { 
-        where: { shift_id: shiftId },
-        returning: true
-      }
-    );
-
-    res.status(200).send({
-      message: "User assigned to shift successfully.",
-      shift: updatedShift[0]
-    });
-
-  } catch (error) {
-    console.error('Error assigning user to shift:', error);
-    res.status(500).send({
-      message: "Error assigning user to shift."
-    });
-  }
-};
+// NOTE: A previous `assignUserToShift` handler that did qualification
+// checks but bypassed availability/class/time-off validation was
+// removed. It was never mounted to any route and was a landmine: any
+// future wiring of it would have silently allowed assignments during
+// class time. The canonical assignment path is PUT /shifts/:id
+// (`updateShift`), which calls `validateAssignmentEligibility`.
 
 /**
  * Bulk-publish multiple shifts in one request.
