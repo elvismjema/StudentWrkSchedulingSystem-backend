@@ -10,7 +10,7 @@ const Department = db.department;
 const exports = {};
 
 // Get student's single active department
-exports.getStudentActiveDepartment = async (userId) => {
+export const getStudentActiveDepartment = async (userId) => {
   try {
     const activeDepartment = await UserDepartment.findOne({
       where: {
@@ -47,6 +47,8 @@ exports.getStudentActiveDepartment = async (userId) => {
     return null;
   }
 };
+
+exports.getStudentActiveDepartment = getStudentActiveDepartment;
 
 const classifyRole = (role) => {
   const roleName = String(role?.role_name || "").toLowerCase();
