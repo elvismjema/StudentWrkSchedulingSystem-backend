@@ -44,6 +44,11 @@ const addMissingColumns = async () => {
       column: 'priority',
       sql: "ADD COLUMN priority ENUM('normal','high') NOT NULL DEFAULT 'normal'",
     },
+    {
+      table: 'shifts',
+      column: 'task_list_id',
+      sql: 'ADD COLUMN task_list_id INT NULL DEFAULT NULL',
+    },
   ];
   // Make position_id nullable so template shifts can be saved before a position is chosen
   try {
