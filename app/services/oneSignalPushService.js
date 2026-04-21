@@ -28,7 +28,8 @@ export const isOneSignalConfigured = () =>
  * The recipient is matched by OneSignal `external_id` which MUST equal the
  * String(userId) set via `OneSignal.login(String(userId))` on the frontend.
  * If the user has no active OneSignal subscriptions (no devices registered)
- * OneSignal returns `errors.invalid_external_user_ids` — we treat that as
+ * OneSignal returns a response WITHOUT an `id` and/or with the alias listed
+ * under `errors.invalid_aliases.external_id` — we treat either as
  * "no-subscriptions" rather than a failure.
  *
  * @param {number|string} userId - recipient user ID; will be stringified for external_id match
@@ -115,24 +116,48 @@ export const sendOneSignalNotification = async (userId, title, message, options 
       return summary;
     }
 
-    // OneSignal responds 200 with { id, recipients, external_id, errors? } even
-    // when the user has no devices — in that case `recipients` is 0 and the
-    // errors array contains "All included players are not subscribed".
-    const recipients = typeof data.recipients === "number" ? data.recipients : 0;
-    const noRecipients =
-      recipients === 0 ||
-      (Array.isArray(data.errors) &&
-        data.errors.some((e) => typeof e === "string" && e.toLowerCase().includes("not subscribed")));
+    // OneSignal's documented 200 response shape is:
+    //   { id, external_id?, errors? }
+    // Per the official docs (https://documentation.onesignal.com/reference/
+    // push-notification):
+    //   - A non-empty `id` means the notification was created and will be
+    //     delivered to the matched subscriptions.
+    //   - A missing or empty `id` means the message was NOT created — usually
+    //     because there were no valid subscriptions in the target audience.
+    //   - When targeting by alias, unmatched IDs come back under
+    //     `errors.invalid_aliases.external_id` (array of the aliases that
+    //     didn't match any user). Unmatched subscription IDs come back under
+    //     `errors.invalid_player_ids`.
+    // The REST API does NOT return a `recipients` count on this endpoint
+    // (that's the /notifications?c=... list endpoint, not the create one),
+    // so we infer delivery from `id` presence + the error structure instead.
+    const invalidExternalIds = Array.isArray(data?.errors?.invalid_aliases?.external_id)
+      ? data.errors.invalid_aliases.external_id
+      : [];
+    const invalidPlayerIds = Array.isArray(data?.errors?.invalid_player_ids)
+      ? data.errors.invalid_player_ids
+      : [];
+    const aliasUnmatched = invalidExternalIds.some(
+      (e) => typeof e === "string" && e.includes(externalId),
+    );
 
-    if (noRecipients) {
+    if (!data.id || aliasUnmatched || invalidPlayerIds.length > 0) {
+      logger.info(
+        `[OneSignalPush] No delivery for user ${userId} (external_id=${externalId}): ${
+          data.id ? "invalid ids in response" : "no notification id returned"
+        } errors=${JSON.stringify(data?.errors || {})}`,
+      );
       return { ...summary, skippedReason: "no-subscriptions", oneSignalId: data.id };
     }
 
-    summary.sent = recipients;
-    summary.devicesTargeted = recipients;
+    // OneSignal accepted the notification. We don't know the exact device
+    // count from this endpoint — set devicesTargeted to 1 for the matched
+    // user so the UI sees a non-zero delivery.
+    summary.sent = 1;
+    summary.devicesTargeted = 1;
     summary.oneSignalId = data.id;
     logger.info(
-      `[OneSignalPush] Sent to user ${userId} (external_id=${externalId}) recipients=${recipients} id=${data.id}`,
+      `[OneSignalPush] Sent to user ${userId} (external_id=${externalId}) id=${data.id}`,
     );
     return summary;
   } catch (err) {
