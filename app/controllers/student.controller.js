@@ -38,6 +38,8 @@ const Availability = db.availability;
 const UserDepartment = db.userDepartment;
 const Department = db.department;
 const Position = db.position;
+const TaskList = db.taskList;
+const TaskListItem = db.taskListItem;
 const ShiftSwapRequest = db.shiftSwapRequest;
 const TimeOffRequest = db.timeOffRequest;
 const BreakRecord = db.breakRecord;
@@ -306,7 +308,14 @@ const filterOutUnavailableShifts = async (userId, shifts) => {
   });
 };
 
-/** Shared include array for shift queries */
+/** Shared include array for shift queries.
+ *
+ * `taskList` surfaces the checklist a manager attached when creating or
+ * editing the shift. Including the ordered `items` gives the student UI
+ * everything it needs to render a task list on the shift detail view
+ * without a follow-up request. `required: false` means shifts without a
+ * task_list_id still come back, just with `taskList: null`.
+ */
 const shiftIncludes = [
   { model: Department, as: "department", attributes: ["department_id", "department_name"] },
   { model: Position, as: "position", attributes: ["position_id", "position_name"] },
@@ -319,6 +328,22 @@ const shiftIncludes = [
     model: User,
     as: "creator",
     attributes: ["id", "fName", "lName"],
+  },
+  {
+    model: TaskList,
+    as: "taskList",
+    required: false,
+    attributes: ["id", "name", "description"],
+    include: [
+      {
+        model: TaskListItem,
+        as: "items",
+        required: false,
+        attributes: ["id", "title", "description", "sort_order"],
+        separate: true,
+        order: [["sort_order", "ASC"], ["id", "ASC"]],
+      },
+    ],
   },
 ];
 
@@ -741,6 +766,24 @@ export const getOpenShifts = async (req, res) => {
         { model: Department, as: "department", attributes: ["department_id", "department_name"] },
         { model: Position, as: "position", attributes: ["position_id", "position_name"] },
         { model: User, as: "assignedUser", attributes: ["id", "fName", "lName"], required: false },
+        // Surface the manager-attached checklist so the Open Shifts detail
+        // view can show students what they'd be picking up before claiming.
+        {
+          model: TaskList,
+          as: "taskList",
+          required: false,
+          attributes: ["id", "name", "description"],
+          include: [
+            {
+              model: TaskListItem,
+              as: "items",
+              required: false,
+              attributes: ["id", "title", "description", "sort_order"],
+              separate: true,
+              order: [["sort_order", "ASC"], ["id", "ASC"]],
+            },
+          ],
+        },
       ],
       order: [["shift_date", "ASC"], ["start_time", "ASC"]],
     });
