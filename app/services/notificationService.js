@@ -153,7 +153,7 @@ const getWebpushClient = async () => {
  * @returns {Promise<{ sent: number, failed: number, pruned: number, skippedReason?: string, devicesTargeted: number }>}
  */
 export const sendWebPushNotification = async (userId, title, message, options = {}) => {
-  const summary = { sent: 0, failed: 0, pruned: 0, devicesTargeted: 0 };
+  const summary = { sent: 0, failed: 0, pruned: 0, devicesTargeted: 0, failures: [] };
   if (!userId) return { ...summary, skippedReason: "no-user-id" };
 
   const webpush = await getWebpushClient();
@@ -203,6 +203,7 @@ export const sendWebPushNotification = async (userId, title, message, options = 
     });
 
     const staleIds = [];
+    const failures = [];
     await Promise.all(
       subscriptions.map(async (sub) => {
         try {
@@ -212,16 +213,27 @@ export const sendWebPushNotification = async (userId, title, message, options = 
           );
           summary.sent += 1;
         } catch (err) {
-          if (err.statusCode === 410 || err.statusCode === 404) {
+          // 404/410 = subscription is gone on the push service side (user revoked perms, cleared site data, uninstalled PWA)
+          // 403       = VAPID signature rejected, usually because the subscription was created under a DIFFERENT public key
+          //             than the one the server currently signs with. The subscription can never succeed, prune it.
+          if (err.statusCode === 410 || err.statusCode === 404 || err.statusCode === 403) {
             staleIds.push(sub.id);
             summary.pruned += 1;
           } else {
             summary.failed += 1;
-            logger.warn(`[NotificationService][PUSH] Failed to send push to user ${userId}: ${err.message}`);
+            failures.push({
+              statusCode: err.statusCode || null,
+              message: err.message || "unknown error",
+            });
+            logger.warn(
+              `[NotificationService][PUSH] Failed to send push to user ${userId}: ` +
+                `statusCode=${err.statusCode} message=${err.message}`,
+            );
           }
         }
       }),
     );
+    summary.failures = failures;
 
     for (const id of staleIds) {
       await PushSubscription.destroy({ where: { id } });
