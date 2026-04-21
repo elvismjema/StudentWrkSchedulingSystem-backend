@@ -346,7 +346,30 @@ export const clockIn = async (req, res) => {
     const responseRecord = await ClockRecord.findByPk(newRecord.clock_id, {
       include: [
         { model: db.user, as: "user" },
-        { model: db.shift, as: "shift", include: [{ model: db.department, as: "department" }] },
+        {
+          model: db.shift,
+          as: "shift",
+          include: [
+            { model: db.department, as: "department" },
+            { model: db.position, as: "position", attributes: ["position_id", "position_name"] },
+            {
+              model: db.taskList,
+              as: "taskList",
+              required: false,
+              attributes: ["id", "name", "description"],
+              include: [
+                {
+                  model: db.taskListItem,
+                  as: "items",
+                  required: false,
+                  attributes: ["id", "title", "description", "sort_order"],
+                  separate: true,
+                  order: [["sort_order", "ASC"], ["id", "ASC"]],
+                },
+              ],
+            },
+          ],
+        },
       ],
     });
 
@@ -467,7 +490,32 @@ export const getMyOpenClockRecord = async (req, res) => {
         user_id: req.auth?.userId,
         clock_out: null,
       },
-      include: [{ model: db.shift, as: "shift" }],
+      include: [
+        {
+          model: db.shift,
+          as: "shift",
+          include: [
+            { model: db.department, as: "department" },
+            { model: db.position, as: "position", attributes: ["position_id", "position_name"] },
+            {
+              model: db.taskList,
+              as: "taskList",
+              required: false,
+              attributes: ["id", "name", "description"],
+              include: [
+                {
+                  model: db.taskListItem,
+                  as: "items",
+                  required: false,
+                  attributes: ["id", "title", "description", "sort_order"],
+                  separate: true,
+                  order: [["sort_order", "ASC"], ["id", "ASC"]],
+                },
+              ],
+            },
+          ],
+        },
+      ],
       order: [["clock_in", "DESC"]],
     });
 
