@@ -12,6 +12,7 @@ SWS is the Student Work Scheduling System for Oklahoma Christian University. Thi
 - **Jest 29** + **Supertest** — unit and integration testing
 - **Winston** + **Morgan** — structured logging (see `LOGGING.md`)
 - **Nodemailer** + **Twilio** — email and SMS notifications
+- **web-push** — browser + PWA push notifications (see [docs/PUSH_NOTIFICATIONS.md](docs/PUSH_NOTIFICATIONS.md))
 - **Multer** — file uploads (qualification evidence)
 - **Sequelize CLI migrations** — schema versioning under `migrations/`
 
