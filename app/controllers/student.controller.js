@@ -445,7 +445,30 @@ export const getDashboard = async (req, res) => {
       ClockRecord.findOne({
         where: { user_id: userId, clock_out: null },
         include: [
-          { model: Shift, as: "shift", include: [{ model: Department, as: "department" }] },
+          {
+            model: Shift,
+            as: "shift",
+            include: [
+              { model: Department, as: "department" },
+              { model: Position, as: "position", attributes: ["position_id", "position_name"] },
+              {
+                model: TaskList,
+                as: "taskList",
+                required: false,
+                attributes: ["id", "name", "description"],
+                include: [
+                  {
+                    model: TaskListItem,
+                    as: "items",
+                    required: false,
+                    attributes: ["id", "title", "description", "sort_order"],
+                    separate: true,
+                    order: [["sort_order", "ASC"], ["id", "ASC"]],
+                  },
+                ],
+              },
+            ],
+          },
           { model: BreakRecord, as: "breaks", where: { break_end: null }, required: false },
         ],
         order: [["clock_in", "DESC"]],
@@ -2040,7 +2063,30 @@ export const studentClockIn = async (req, res) => {
     const responseRecord = await ClockRecord.findByPk(newRecord.clock_id, {
       include: [
         { model: User, as: "user", attributes: ["id", "fName", "lName"] },
-        { model: Shift, as: "shift", include: [{ model: Department, as: "department" }] },
+        {
+          model: Shift,
+          as: "shift",
+          include: [
+            { model: Department, as: "department" },
+            { model: Position, as: "position", attributes: ["position_id", "position_name"] },
+            {
+              model: TaskList,
+              as: "taskList",
+              required: false,
+              attributes: ["id", "name", "description"],
+              include: [
+                {
+                  model: TaskListItem,
+                  as: "items",
+                  required: false,
+                  attributes: ["id", "title", "description", "sort_order"],
+                  separate: true,
+                  order: [["sort_order", "ASC"], ["id", "ASC"]],
+                },
+              ],
+            },
+          ],
+        },
       ],
     });
 
