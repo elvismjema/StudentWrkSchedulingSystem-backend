@@ -45,6 +45,20 @@ jobs:
           if [ -z "${PORT}" ]; then PORT="3132"; fi
           CORS_ORIGIN="${{ secrets.CORS_ORIGIN }}"
           if [ -z "${CORS_ORIGIN}" ]; then CORS_ORIGIN="http://localhost:8081,https://workerscheduling.eaglesoftwareteam.com"; fi
+          # VAPID keys gate web push. They are OPTIONAL here: if any of the
+          # three secrets are unset the backend still boots and every push
+          # send cleanly short-circuits with skippedReason:"vapid-not-
+          # configured". The alternative — hard-failing when absent — would
+          # turn a missing secret into a full production outage, which we
+          # don't want. Set these three repo secrets to actually deliver
+          # push notifications:
+          #   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_EMAIL
+          # Generate the keypair with: npx web-push generate-vapid-keys
+          VAPID_EMAIL="${{ secrets.VAPID_EMAIL }}"
+          if [ -z "${VAPID_EMAIL}" ]; then
+            VAPID_EMAIL="mailto:admin@workerscheduling.eaglesoftwareteam.com"
+          fi
+
           cat <<EOF > .env
           DB_HOST=${{ secrets.AWS_DB_HOST }}
           DB_PORT=${DB_PORT}
@@ -55,6 +69,9 @@ jobs:
           CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}
           CORS_ORIGIN=${CORS_ORIGIN}
           PORT=${PORT}
+          VAPID_PUBLIC_KEY=${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY=${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_EMAIL=${VAPID_EMAIL}
           EOF
 
       - name: Bundle deploy artifacts
