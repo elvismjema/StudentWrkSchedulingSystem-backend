@@ -204,13 +204,38 @@ export const sendWebPushNotification = async (userId, title, message, options = 
 
     const staleIds = [];
     const failures = [];
+
+    // web-push has no default network timeout — a dead push-service endpoint
+    // (rare) or slow DNS can hang the request indefinitely, which in turn
+    // hangs the HTTP response to our own client. Bound every delivery at
+    // WEB_PUSH_TIMEOUT_MS so the test endpoint always returns promptly.
+    const WEB_PUSH_TIMEOUT_MS = 8000;
+    const sendWithTimeout = (sub) =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          const e = new Error(`web-push timeout after ${WEB_PUSH_TIMEOUT_MS}ms`);
+          e.code = "ETIMEDOUT";
+          reject(e);
+        }, WEB_PUSH_TIMEOUT_MS);
+        webpush
+          .sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            payload,
+          )
+          .then((v) => {
+            clearTimeout(timer);
+            resolve(v);
+          })
+          .catch((e) => {
+            clearTimeout(timer);
+            reject(e);
+          });
+      });
+
     await Promise.all(
       subscriptions.map(async (sub) => {
         try {
-          await webpush.sendNotification(
-            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-            payload,
-          );
+          await sendWithTimeout(sub);
           summary.sent += 1;
         } catch (err) {
           // 404/410 = subscription is gone on the push service side (user revoked perms, cleared site data, uninstalled PWA)
