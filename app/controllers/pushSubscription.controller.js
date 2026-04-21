@@ -113,7 +113,9 @@ export const sendTestPush = async (req, res) => {
           ? "Test push sent."
           : summary.skippedReason === "no-subscriptions"
             ? "No devices subscribed yet. Enable push on this device first."
-            : summary.skippedReason === "vapid-not-configured"
+            : summary.skippedReason === "vapid-not-configured" ||
+                summary.skippedReason === "onesignal-not-configured" ||
+                summary.skippedReason === "push-not-configured"
               ? "Push notifications are not configured on this server."
               : "Test push attempted but no deliveries succeeded.",
       ...summary,
