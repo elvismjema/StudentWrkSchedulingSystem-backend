@@ -64,6 +64,49 @@ const fail = (res, message, status = 500) =>
   res.status(status).json({ success: false, message });
 
 /**
+ * Application timezone. Managers create shifts using wall-clock time
+ * (e.g. "6:20 PM") and the DB stores TIME columns as unqualified strings
+ * like "18:20:00". When the server runs in UTC but the app operates in
+ * Central, comparing `new Date().getHours()` (server-local = UTC) against
+ * these strings silently drifts by ~5 hours — hiding evening shifts from
+ * the Open Shifts pool and picking the wrong nextShift on the Dashboard.
+ *
+ * All "now" comparisons against DB TIME/DATEONLY columns must go through
+ * `getAppNow()` so the arithmetic happens in the same timezone the shift
+ * strings are authored in.
+ */
+const APP_TZ = "America/Chicago";
+
+/**
+ * Returns the current date/time expressed in `APP_TZ` as the three forms
+ * we compare against DB columns:
+ *   - today:       "YYYY-MM-DD"  (matches DATEONLY shift_date)
+ * - currentTime: "HH:MM:SS"    (matches TIME start_time/end_time)
+ *   - nowMinutes:  integer minutes-since-midnight (for toMinutes() math)
+ *
+ * Uses Intl parts so we don't depend on the server's TZ env.
+ */
+const getAppNow = (now = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now).reduce((acc, p) => {
+    if (p.type !== "literal") acc[p.type] = p.value;
+    return acc;
+  }, {});
+  const today = `${parts.year}-${parts.month}-${parts.day}`;
+  const currentTime = `${parts.hour}:${parts.minute}:${parts.second}`;
+  const nowMinutes = Number(parts.hour) * 60 + Number(parts.minute);
+  return { today, currentTime, nowMinutes };
+};
+
+/**
  * Resolve the student's current active department membership and return its
  * department_id (or null if no active membership exists).
  *
@@ -302,9 +345,9 @@ const shiftIncludes = [
 export const getDashboard = async (req, res) => {
   try {
     const userId = req.auth.userId;
-    const now = new Date();
-    const today = now.toISOString().split("T")[0];
-    const currentTime = now.toTimeString().slice(0, 8); // HH:MM:SS for end_time comparison
+    // Use Central "now" to match how shift_date / start_time / end_time
+    // are stored (manager wall-clock entries, no TZ attached).
+    const { today, currentTime } = getAppNow();
     const { weekStart, weekEnd } = getCurrentWeekRange();
 
     // Use the student's current department context for dashboard data.
@@ -446,10 +489,10 @@ export const getDashboard = async (req, res) => {
     // (manual unavailable blocks, class-schedule blocks, approved time-off).
     const availableOpenShifts = await filterOutUnavailableShifts(userId, openShifts);
 
-    // Derive next shift (first today shift with end_time > now, or first future shift this week)
-    // Use UTC consistently — today is already UTC, so nowMinutes must also be UTC
-    const nowUTC = new Date();
-    const nowMinutes = nowUTC.getUTCHours() * 60 + nowUTC.getUTCMinutes();
+    // Derive next shift (first today shift with end_time > now, or first future shift this week).
+    // `nowMinutes` is in APP_TZ (Central) to match the wall-clock end_time strings
+    // stored on the Shift rows; see getAppNow() for the rationale.
+    const { nowMinutes } = getAppNow();
     let nextShift = todayShifts.find((s) => toMinutes(s.end_time) > nowMinutes) || null;
     if (!nextShift && weekShifts.length > 0) {
       nextShift = weekShifts.find(
@@ -619,12 +662,13 @@ export const getMySchedule = async (req, res) => {
 export const getOpenShifts = async (req, res) => {
   try {
     const userId = req.auth.userId;
-    const now = new Date();
-    const today = now.toISOString().split("T")[0];
-    // HH:MM:SS — compared against shift.end_time so we hide shifts that
-    // have already finished today. Example: 6:00–7:30 AM shift is hidden
-    // after 7:30 AM the same day.
-    const currentTime = now.toTimeString().slice(0, 8);
+    // `today` and `currentTime` are compared against shift_date (DATEONLY)
+    // and end_time (TIME) columns that were stored as Central wall-clock
+    // values with no TZ attached. Using server-UTC here made evening shifts
+    // (e.g. 6–7 PM Central) appear "already ended" by mid-morning and
+    // silently disappear from the pool. `getAppNow()` pins the comparison
+    // to APP_TZ so the filter matches what managers and students see.
+    const { today, currentTime } = getAppNow();
     const { departmentId, startDate, endDate } = req.query;
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(Number(req.query.limit) || 25, 100);
