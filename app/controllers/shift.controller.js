@@ -219,7 +219,7 @@ const validateDepartmentMembership = async (departmentId, userId, positionId) =>
     };
   }
 
-  const membership = await UserDepartment.findOne({
+  const memberships = await UserDepartment.findAll({
     where: {
       user_id: userId,
       department_id: departmentId,
@@ -227,7 +227,7 @@ const validateDepartmentMembership = async (departmentId, userId, positionId) =>
     },
   });
 
-  if (!membership) {
+  if (!memberships.length) {
     return {
       valid: false,
       message: "Assigned user is not active in this department.",
@@ -235,12 +235,28 @@ const validateDepartmentMembership = async (departmentId, userId, positionId) =>
     };
   }
 
-  if (!membership.role_id) {
+  const hasRoleAssignment = memberships.some((membership) => !!membership.role_id);
+  if (!hasRoleAssignment) {
     return {
       valid: false,
       message: "Assigned user does not have an active role assignment in this department.",
       conflictType: "role_mismatch",
     };
+  }
+
+  if (positionId) {
+    const numericPositionId = Number(positionId);
+    const hasPositionAssignment = memberships.some(
+      (membership) => Number(membership.position_id) === numericPositionId,
+    );
+
+    if (!hasPositionAssignment) {
+      return {
+        valid: false,
+        message: "Assigned user is not assigned to the selected position.",
+        conflictType: "position_mismatch",
+      };
+    }
   }
 
   return { valid: true };
@@ -1165,6 +1181,7 @@ export const listAssignableWorkers = async (req, res) => {
     const managerUserId = Number(req.auth?.userId || 0);
     const departmentId = Number(req.query.department_id || 0);
     const positionId = req.query.position_id ? Number(req.query.position_id) : null;
+    const excludeShiftId = req.query.exclude_shift_id ? Number(req.query.exclude_shift_id) : null;
     const shiftDate = req.query.shift_date;
     const startTime = req.query.start_time;
     const endTime = req.query.end_time;
@@ -1245,6 +1262,7 @@ export const listAssignableWorkers = async (req, res) => {
           startTime,
           endTime,
           assignedUserId,
+          excludeShiftId,
         );
 
         if (!bufferValidation.valid) {
