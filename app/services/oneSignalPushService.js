@@ -14,7 +14,56 @@
 // Docs: https://documentation.onesignal.com/reference/create-notification
 // ---------------------------------------------------------------------------
 
+import https from "https";
 import logger from "../config/logger.js";
+
+// Minimal HTTPS JSON client. We intentionally avoid the global `fetch` because
+// it isn't reliably available on every Node version we deploy to (the
+// production host currently runs on a Node where global `fetch` is not
+// defined). Using the built-in `https` module keeps this provider dependency-
+// free and portable, matching the pattern already used elsewhere in this
+// codebase (see controllers/auth.controller.js).
+const httpsPostJson = (url, { headers = {}, body, timeoutMs = 8000 } = {}) =>
+  new Promise((resolve, reject) => {
+    const payload = typeof body === "string" ? body : JSON.stringify(body || {});
+    const req = https.request(
+      url,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+          ...headers,
+        },
+      },
+      (res) => {
+        let raw = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          raw += chunk;
+        });
+        res.on("end", () => {
+          let data = {};
+          if (raw) {
+            try {
+              data = JSON.parse(raw);
+            } catch {
+              data = { raw };
+            }
+          }
+          resolve({ statusCode: res.statusCode || 0, data, raw });
+        });
+      },
+    );
+
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`OneSignal request timed out after ${timeoutMs}ms`));
+    });
+    req.on("error", (err) => reject(err));
+    req.write(payload);
+    req.end();
+  });
 
 /**
  * @returns {boolean} whether the OneSignal provider has the env vars it needs to run.
@@ -79,39 +128,26 @@ export const sendOneSignalNotification = async (userId, title, message, options 
     ttl: options.priority === "high" ? 86400 : 21600, // 24h vs 6h
   };
 
-  // Bound the API call so a slow OneSignal never hangs our response.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
-
   try {
-    const res = await fetch("https://api.onesignal.com/notifications", {
-      method: "POST",
+    // Bound the API call so a slow OneSignal never hangs our response.
+    const { statusCode, data, raw } = await httpsPostJson("https://api.onesignal.com/notifications", {
       headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
         // Per OneSignal docs, use "Key" auth scheme with the REST API key.
         Authorization: `Key ${apiKey}`,
       },
-      body: JSON.stringify(body),
-      signal: controller.signal,
+      body,
+      timeoutMs: 8000,
     });
 
-    const text = await res.text();
-    let data = {};
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch {
-      data = { raw: text };
-    }
-
-    if (!res.ok) {
+    const ok = statusCode >= 200 && statusCode < 300;
+    if (!ok) {
       summary.failed = 1;
       summary.failures.push({
-        statusCode: res.status,
-        message: data?.errors ? JSON.stringify(data.errors) : text || "unknown OneSignal error",
+        statusCode,
+        message: data?.errors ? JSON.stringify(data.errors) : raw || "unknown OneSignal error",
       });
       logger.warn(
-        `[OneSignalPush] Delivery error for user ${userId}: HTTP ${res.status} ${JSON.stringify(data?.errors || data)}`,
+        `[OneSignalPush] Delivery error for user ${userId}: HTTP ${statusCode} ${JSON.stringify(data?.errors || data)}`,
       );
       return summary;
     }
@@ -163,12 +199,10 @@ export const sendOneSignalNotification = async (userId, title, message, options 
   } catch (err) {
     summary.failed = 1;
     summary.failures.push({
-      statusCode: err?.name === "AbortError" ? null : null,
-      message: err?.name === "AbortError" ? "OneSignal request timed out after 8000ms" : err?.message || "unknown error",
+      statusCode: null,
+      message: err?.message || "unknown error",
     });
     logger.warn(`[OneSignalPush] Delivery exception for user ${userId}: ${err?.message || err}`);
     return summary;
-  } finally {
-    clearTimeout(timer);
   }
 };
