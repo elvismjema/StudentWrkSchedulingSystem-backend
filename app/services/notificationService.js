@@ -9,6 +9,10 @@
 
 import db from "../models/index.js";
 import logger from "../config/logger.js";
+import {
+  sendOneSignalNotification,
+  isOneSignalConfigured,
+} from "./oneSignalPushService.js";
 
 const Notification = db.notification;
 const User = db.user;
@@ -156,10 +160,40 @@ export const sendWebPushNotification = async (userId, title, message, options = 
   const summary = { sent: 0, failed: 0, pruned: 0, devicesTargeted: 0, failures: [] };
   if (!userId) return { ...summary, skippedReason: "no-user-id" };
 
+  // Preference gating applies regardless of which push provider we use below.
+  // We check it once, here, so the OneSignal and VAPID paths both respect it.
+  const prefKey = options.type ? NOTIFICATION_TYPE_TO_PREF_KEY[options.type] : null;
+  if (prefKey) {
+    const user = await User.findByPk(userId, { attributes: ["id", "notification_preferences"] });
+    let prefs = {};
+    try {
+      prefs = user?.notification_preferences ? JSON.parse(user.notification_preferences) : {};
+    } catch {
+      prefs = {};
+    }
+    if (prefs[prefKey] === false) {
+      logger.debug(`[NotificationService][PUSH] User ${userId} opted out of '${prefKey}' push notifications`);
+      return { ...summary, skippedReason: `opted-out:${prefKey}` };
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Primary provider: OneSignal (when configured).
+  //
+  // OneSignal owns the service worker registration, subscription storage,
+  // iOS PWA delivery, and retry/pruning. When both providers are configured
+  // we prefer OneSignal; the legacy VAPID/web-push path below stays as a
+  // fallback so nothing breaks if the secrets are ever missing.
+  // ---------------------------------------------------------------------
+  if (isOneSignalConfigured()) {
+    const result = await sendOneSignalNotification(userId, title, message, options);
+    return result;
+  }
+
   const webpush = await getWebpushClient();
   if (!webpush) {
-    logger.debug("[NotificationService][PUSH] VAPID keys not configured; skipping push delivery");
-    return { ...summary, skippedReason: "vapid-not-configured" };
+    logger.debug("[NotificationService][PUSH] No push provider configured; skipping push delivery");
+    return { ...summary, skippedReason: "push-not-configured" };
   }
 
   try {
@@ -179,20 +213,8 @@ export const sendWebPushNotification = async (userId, title, message, options = 
     }
     summary.devicesTargeted = subscriptions.length;
 
-    // Check per-preference opt-out
-    const prefKey = options.type ? NOTIFICATION_TYPE_TO_PREF_KEY[options.type] : null;
-    if (prefKey && user) {
-      let prefs = {};
-      try {
-        prefs = user.notification_preferences ? JSON.parse(user.notification_preferences) : {};
-      } catch {
-        prefs = {};
-      }
-      if (prefs[prefKey] === false) {
-        logger.debug(`[NotificationService][PUSH] User ${userId} opted out of '${prefKey}' push notifications`);
-        return { ...summary, skippedReason: `opted-out:${prefKey}` };
-      }
-    }
+    // Preference opt-out already applied above (before provider dispatch), so
+    // this block only needs to build the push payload.
 
     const payload = JSON.stringify({
       title,
