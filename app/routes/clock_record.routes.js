@@ -11,6 +11,8 @@ import {
   updateManagerTimecardStatus,
   approveAllManagerTimecards,
   getManagerLiveAttendance,
+  createManagerManualEntry,
+  deleteManagerManualEntry,
 } from "../controllers/clockRecord.controller.js";
 
 const router = Router();
@@ -24,5 +26,8 @@ router.get("/manager/timecards", [authenticate, requireManager], getManagerTimec
 router.get("/manager/timecards/:userId", [authenticate, requireManager], getManagerTimecardDetail);
 router.patch("/manager/timecards/:userId/status", [authenticate, requireManager], updateManagerTimecardStatus);
 router.post("/manager/timecards/approve-all", [authenticate, requireManager], approveAllManagerTimecards);
+// Manual time entry — manager creates/deletes a shift-less clock record for a worker
+router.post("/manager/timecards/:userId/manual-entry", [authenticate, requireManager], createManagerManualEntry);
+router.delete("/manager/entries/:clockId", [authenticate, requireManager], deleteManagerManualEntry);
 
 export default router;

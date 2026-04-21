@@ -156,15 +156,23 @@ const buildTimecardRows = async ({ userIds, departmentIds, periodStartStr, perio
   const clockRecords = await ClockRecord.findAll({
     where: {
       user_id: { [Op.in]: workerIds },
+      // Scope to the selected pay period using the actual clock-in timestamp
+      // so workers with no shifts (or shift-less records) still appear.
+      clock_in: {
+        [Op.between]: [
+          new Date(periodStartStr + "T00:00:00"),
+          new Date(periodEndStr   + "T23:59:59"),
+        ],
+      },
     },
     include: [
       {
         model: Shift,
         as: "shift",
-        required: true,
+        // LEFT JOIN — workers with zero clock records still appear in the list
+        required: false,
         where: {
           department_id: { [Op.in]: departmentIds },
-          shift_date: { [Op.between]: [periodStartStr, periodEndStr] },
         },
         include: [{ model: db.department, as: "department" }],
       },
@@ -913,6 +921,135 @@ export const updateManagerTimecardStatus = async (req, res) => {
   } catch (error) {
     return res.status(500).send({
       message: `Error updating worker timecard status: ${error.message}`,
+    });
+  }
+};
+
+/**
+ * POST /clock-records/manager/timecards/:userId/manual-entry
+ *
+ * Allows a manager to create a manual clock record for a worker who forgot
+ * to clock in, worked extra hours, or had any other unrecorded time.
+ * The record is inserted with shift_id = null so it is clearly distinguishable
+ * from real clock-in/out records and appears in the punch log as "Manual".
+ *
+ * Body: { clock_in: ISO string, clock_out: ISO string (optional), note: string (optional),
+ *         period_start: YYYY-MM-DD, period_end: YYYY-MM-DD }
+ */
+export const createManagerManualEntry = async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (!userId) return res.status(400).send({ message: "Valid user id is required." });
+
+    const { clock_in: clockInRaw, clock_out: clockOutRaw, note } = req.body;
+    if (!clockInRaw) {
+      return res.status(400).send({ message: "clock_in is required." });
+    }
+
+    const clockInDt  = new Date(clockInRaw);
+    const clockOutDt = clockOutRaw ? new Date(clockOutRaw) : null;
+
+    if (Number.isNaN(clockInDt.getTime())) {
+      return res.status(400).send({ message: "clock_in must be a valid date/time." });
+    }
+    if (clockOutDt && Number.isNaN(clockOutDt.getTime())) {
+      return res.status(400).send({ message: "clock_out must be a valid date/time." });
+    }
+    if (clockOutDt && clockOutDt <= clockInDt) {
+      return res.status(400).send({ message: "clock_out must be after clock_in." });
+    }
+
+    const scope = await resolveScopedDepartmentIds(req);
+    if (scope.error) return res.status(403).send({ message: scope.error });
+    if (!scope.departmentIds.length) return res.status(403).send({ message: "No manager department scope found." });
+
+    // Verify the target user is a worker in the manager's department
+    const workerMembership = await UserDepartment.findOne({
+      where: {
+        user_id: userId,
+        department_id: { [Op.in]: scope.departmentIds },
+        is_active: true,
+        request_status: "approved",
+      },
+      include: [{ model: Role, as: "role", attributes: ["role_name", "permission_level"] }],
+    });
+
+    if (!workerMembership) {
+      return res.status(404).send({ message: "Worker not found in your managed departments." });
+    }
+    if (Number(workerMembership.role?.permission_level || 0) >= 50) {
+      return res.status(403).send({ message: "Cannot add a manual entry for a manager account." });
+    }
+
+    const record = await ClockRecord.create({
+      user_id: userId,
+      shift_id: null,   // null = manual entry, not tied to a scheduled shift
+      clock_in: clockInDt,
+      clock_out: clockOutDt,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+
+    return res.status(201).send({
+      message: "Manual entry created.",
+      // Return note in response for frontend display even though it's not persisted in DB yet
+      data: { ...record.toJSON(), note: note ? String(note).slice(0, 500) : null, is_manual: true },
+    });
+  } catch (error) {
+    return res.status(500).send({
+      message: `Error creating manual entry: ${error.message}`,
+    });
+  }
+};
+
+/**
+ * DELETE /clock-records/manager/entries/:clockId
+ *
+ * Allows a manager to delete a manual clock record (shift_id = null only).
+ * Real clock-in/out records tied to a shift cannot be deleted this way —
+ * this protects payroll integrity for system-generated records.
+ */
+export const deleteManagerManualEntry = async (req, res) => {
+  try {
+    const clockId = Number(req.params.clockId);
+    if (!clockId) return res.status(400).send({ message: "Valid clock record id is required." });
+
+    const scope = await resolveScopedDepartmentIds(req);
+    if (scope.error) return res.status(403).send({ message: scope.error });
+    if (!scope.departmentIds.length) return res.status(403).send({ message: "No manager department scope found." });
+
+    const record = await ClockRecord.findByPk(clockId);
+    if (!record) {
+      return res.status(404).send({ message: "Clock record not found." });
+    }
+
+    // Only manual entries (no shift) can be deleted by a manager
+    if (record.shift_id !== null) {
+      return res.status(403).send({
+        message: "Only manual (shift-less) entries can be deleted. Real clock records are protected.",
+      });
+    }
+
+    // Confirm the worker belongs to the manager's department
+    const workerMembership = await UserDepartment.findOne({
+      where: {
+        user_id: record.user_id,
+        department_id: { [Op.in]: scope.departmentIds },
+        is_active: true,
+        request_status: "approved",
+      },
+    });
+
+    if (!workerMembership) {
+      return res.status(403).send({ message: "This record does not belong to a worker in your departments." });
+    }
+
+    await record.destroy();
+
+    return res.send({ message: "Manual entry deleted." });
+  } catch (error) {
+    return res.status(500).send({
+      message: `Error deleting manual entry: ${error.message}`,
     });
   }
 };
