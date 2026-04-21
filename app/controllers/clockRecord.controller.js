@@ -23,7 +23,8 @@ const toDateOnly = (value) => {
 const dateOnlyString = (dateValue) => {
   const d = new Date(dateValue);
   if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString().split("T")[0];
+  // Use America/Chicago (Oklahoma) time so dates never shift by a day at 7 PM CDT
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(d);
 };
 const addDays = (date, days) => {
   const d = new Date(date);
@@ -643,47 +644,56 @@ export const getManagerTimecardDetail = async (req, res) => {
     });
     const shiftIds = shifts.map((shift) => Number(shift.shift_id));
 
-    const clockRecords = shiftIds.length
-      ? await ClockRecord.findAll({
-        where: {
-          user_id: userId,
-          shift_id: { [Op.in]: shiftIds },
+    // Fetch ALL clock records for the worker in this period — including ones
+    // not tied to a shift (LEFT JOIN on shift).
+    const periodStartDt = new Date(period.periodStartStr + "T00:00:00");
+    const periodEndDt   = new Date(period.periodEndStr   + "T23:59:59");
+
+    const clockRecords = await ClockRecord.findAll({
+      where: {
+        user_id: userId,
+        clock_in: { [Op.between]: [periodStartDt, periodEndDt] },
+      },
+      include: [
+        {
+          model: Shift,
+          as: "shift",
+          required: false,
+          include: [{ model: db.department, as: "department" }],
         },
-        include: [
-          {
-            model: Shift,
-            as: "shift",
-            include: [{ model: db.department, as: "department" }],
-          },
-          {
-            model: TimeDiscrepancy,
-            as: "timeDiscrepancies",
-            required: false,
-          },
-        ],
-        order: [["clock_in", "ASC"]],
-      })
-      : [];
+        {
+          model: TimeDiscrepancy,
+          as: "timeDiscrepancies",
+          required: false,
+        },
+      ],
+      order: [["clock_in", "ASC"]],
+    });
 
     const byShiftId = new Map();
+    const unlinkedRecords = []; // clock records with no shift
     clockRecords.forEach((record) => {
       const sid = Number(record.shift_id || 0);
-      if (!sid) return;
-      if (!byShiftId.has(sid)) byShiftId.set(sid, []);
-      byShiftId.get(sid).push(record);
+      if (sid) {
+        if (!byShiftId.has(sid)) byShiftId.set(sid, []);
+        byShiftId.get(sid).push(record);
+      } else {
+        unlinkedRecords.push(record);
+      }
     });
 
     const punchLog = [];
     const exceptions = [];
     let totalHours = 0;
 
+    // Process shift-linked records
     shifts.forEach((shift) => {
       const shiftRecords = byShiftId.get(Number(shift.shift_id)) || [];
       if (!shiftRecords.length) {
         exceptions.push({
           type: "missed_shift",
           date: shift.shift_date,
-          message: `No clock record for scheduled shift (${shift.start_time} - ${shift.end_time}).`,
+          message: `No clock record for scheduled shift (${shift.start_time} – ${shift.end_time}).`,
           severity: "error",
         });
         return;
@@ -695,7 +705,7 @@ export const getManagerTimecardDetail = async (req, res) => {
         const varianceMinutes = scheduledClockIn && actualClockIn
           ? minutesBetween(actualClockIn, scheduledClockIn)
           : null;
-        const lateThreshold = Number(shift.department?.late_threshold_minutes || 5);
+        const lateThreshold  = Number(shift.department?.late_threshold_minutes || 5);
         const earlyThreshold = Number(shift.department?.early_threshold_minutes || 5);
         const workedHours = getWorkedHours(record.clock_in, record.clock_out);
         totalHours += workedHours;
@@ -708,28 +718,13 @@ export const getManagerTimecardDetail = async (req, res) => {
         });
 
         if (statusMeta.status === "late") {
-          exceptions.push({
-            type: "late_arrival",
-            date: shift.shift_date,
-            message: `Late by ${statusMeta.lateMinutes} minute(s).`,
-            severity: "warning",
-          });
+          exceptions.push({ type: "late_arrival", date: shift.shift_date, message: `Late by ${statusMeta.lateMinutes} minute(s).`, severity: "warning" });
         }
         if (statusMeta.status === "early") {
-          exceptions.push({
-            type: "early_clock_in",
-            date: shift.shift_date,
-            message: "Clocked in earlier than threshold.",
-            severity: "info",
-          });
+          exceptions.push({ type: "early_clock_in", date: shift.shift_date, message: "Clocked in earlier than threshold.", severity: "info" });
         }
         if (!record.clock_out) {
-          exceptions.push({
-            type: "missing_clock_out",
-            date: shift.shift_date,
-            message: "Missing clock-out for this shift.",
-            severity: "error",
-          });
+          exceptions.push({ type: "missing_clock_out", date: shift.shift_date, message: "Missing clock-out for this shift.", severity: "error" });
         }
 
         punchLog.push({
@@ -742,6 +737,30 @@ export const getManagerTimecardDetail = async (req, res) => {
           status: statusMeta.status,
           late_minutes: statusMeta.lateMinutes,
         });
+      });
+    });
+
+    // Process clock records not linked to any shift — still count toward hours
+    unlinkedRecords.forEach((record) => {
+      const workedHours = getWorkedHours(record.clock_in, record.clock_out);
+      totalHours += workedHours;
+      const clockInDate = record.clock_in
+        ? new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date(record.clock_in))
+        : null;
+
+      if (!record.clock_out) {
+        exceptions.push({ type: "missing_clock_out", date: clockInDate, message: "Missing clock-out (no shift linked).", severity: "error" });
+      }
+
+      punchLog.push({
+        clock_id: record.clock_id,
+        shift_id: null,
+        shift_date: clockInDate,
+        clock_in: record.clock_in,
+        clock_out: record.clock_out,
+        worked_hours: toHours(workedHours),
+        status: record.clock_out ? "on-time" : "missed",
+        late_minutes: null,
       });
     });
 
@@ -877,44 +896,53 @@ export const approveAllManagerTimecards = async (req, res) => {
     });
 
     const now = new Date();
-    let updatedCount = 0;
-    for (const membership of targets) {
-      const userId = Number(membership.user_id);
-      const departmentId = Number(membership.department_id);
-      const existing = await TimecardApproval.findOne({
-        where: {
-          user_id: userId,
-          department_id: departmentId,
-          period_start: period.periodStartStr,
-          period_end: period.periodEndStr,
-        },
-      });
+    const targetUserDeptPairs = targets.map((m) => ({
+      user_id: Number(m.user_id),
+      department_id: Number(m.department_id),
+    }));
 
+    if (!targetUserDeptPairs.length) {
+      return res.send({ message: "No eligible workers to approve.", updated_count: 0 });
+    }
+
+    // Fetch all existing approvals for this period in one query
+    const existingApprovals = await TimecardApproval.findAll({
+      where: {
+        user_id: { [Op.in]: targetUserDeptPairs.map((p) => p.user_id) },
+        department_id: { [Op.in]: targetUserDeptPairs.map((p) => p.department_id) },
+        period_start: period.periodStartStr,
+        period_end: period.periodEndStr,
+      },
+    });
+    const existingMap = new Map(
+      existingApprovals.map((a) => [`${Number(a.user_id)}:${Number(a.department_id)}`, a])
+    );
+
+    const toCreate = [];
+    const toUpdate = [];
+
+    for (const { user_id, department_id } of targetUserDeptPairs) {
+      const key = `${user_id}:${department_id}`;
+      const existing = existingMap.get(key);
       if (!existing) {
-        await TimecardApproval.create({
-          user_id: userId,
-          department_id: departmentId,
-          period_start: period.periodStartStr,
-          period_end: period.periodEndStr,
-          status: "approved",
-          decided_by: req.auth?.userId,
-          decided_at: now,
-          created_at: now,
-          updated_at: now,
-        });
-        updatedCount += 1;
-        continue;
-      }
-
-      if (String(existing.status || "").toLowerCase() === "pending") {
-        existing.status = "approved";
-        existing.decided_by = req.auth?.userId;
-        existing.decided_at = now;
-        existing.updated_at = now;
-        await existing.save();
-        updatedCount += 1;
+        toCreate.push({ user_id, department_id, period_start: period.periodStartStr, period_end: period.periodEndStr, status: "approved", decided_by: req.auth?.userId, decided_at: now, created_at: now, updated_at: now });
+      } else if (String(existing.status || "").toLowerCase() === "pending") {
+        toUpdate.push(existing);
       }
     }
+
+    // Bulk create new approvals
+    if (toCreate.length) await TimecardApproval.bulkCreate(toCreate);
+
+    // Bulk update pending → approved
+    if (toUpdate.length) {
+      await TimecardApproval.update(
+        { status: "approved", decided_by: req.auth?.userId, decided_at: now, updated_at: now },
+        { where: { id: { [Op.in]: toUpdate.map((a) => a.id) } } }
+      );
+    }
+
+    const updatedCount = toCreate.length + toUpdate.length;
 
     return res.send({
       message: "Pending timecards approved.",
