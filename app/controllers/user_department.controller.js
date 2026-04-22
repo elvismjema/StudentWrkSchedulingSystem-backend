@@ -964,4 +964,152 @@ exports.rejectJoinRequest = async (req, res) => {
   }
 };
 
+// Manager: add a worker to an additional position within an existing department
+// membership, without replacing their current position assignments. Inserts a
+// new membership row for (user_id, department_id, position_id) if one does not
+// already exist; otherwise reactivates the existing row. Leaves any other
+// memberships (including those with different positions) untouched.
+exports.addWorkerPosition = async (req, res) => {
+  const userId = Number(req.body?.userId ?? req.body?.user_id);
+  const departmentId = Number(req.body?.departmentId ?? req.body?.department_id);
+  const positionId = Number(req.body?.positionId ?? req.body?.position_id);
+
+  if (!userId || !departmentId || !positionId) {
+    return res.status(400).send({
+      message: "userId, departmentId, and positionId are required.",
+    });
+  }
+
+  try {
+    const actorUserId = req.auth?.userId;
+    const actorEmail = req.auth?.email;
+    const canManage = await canManageDepartment(actorUserId, actorEmail, departmentId);
+    if (!canManage) {
+      return res.status(403).send({
+        message: "Forbidden! You can only manage users in your departments.",
+      });
+    }
+
+    const position = await db.position.findByPk(positionId);
+    if (!position || Number(position.department_id) !== departmentId) {
+      return res.status(400).send({
+        message: "Selected position does not belong to this department.",
+      });
+    }
+
+    // Pick a student-level role for the department so the new row is valid.
+    const Op = db.Sequelize.Op;
+    const studentRole = await db.role.findOne({
+      where: {
+        department_id: departmentId,
+        [Op.or]: [
+          { permission_level: { [Op.lt]: 50 } },
+          { role_name: { [Op.like]: "%student%" } },
+          { role_name: { [Op.like]: "%worker%" } },
+        ],
+      },
+      order: [["permission_level", "ASC"], ["role_id", "ASC"]],
+    });
+
+    if (!studentRole) {
+      return res.status(404).send({
+        message: "No role configured for this department.",
+      });
+    }
+
+    // If the exact (user, dept, position) row already exists, reactivate it.
+    let membership = await UserDepartment.findOne({
+      where: {
+        user_id: userId,
+        department_id: departmentId,
+        position_id: positionId,
+      },
+      order: [["ud_id", "DESC"]],
+    });
+
+    if (membership) {
+      membership.role_id = studentRole.role_id;
+      membership.is_active = true;
+      membership.request_status = "approved";
+      membership.deactivated_at = null;
+      membership.assigned_at = new Date();
+      await membership.save();
+    } else {
+      membership = await UserDepartment.create({
+        user_id: userId,
+        department_id: departmentId,
+        position_id: positionId,
+        role_id: studentRole.role_id,
+        is_active: true,
+        request_status: "approved",
+        assigned_at: new Date(),
+      });
+    }
+
+    return res.status(200).send({
+      message: "Worker added to position successfully.",
+      data: membership,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err.message || "Some error occurred while adding worker to position.",
+    });
+  }
+};
+
+// Manager: remove a worker from a specific position in a department, leaving
+// their other position memberships in that department (and all other
+// departments) untouched. Soft-deactivates only the (user, dept, position) row.
+exports.removeWorkerPosition = async (req, res) => {
+  const userId = Number(req.body?.userId ?? req.body?.user_id);
+  const departmentId = Number(req.body?.departmentId ?? req.body?.department_id);
+  const positionId = Number(req.body?.positionId ?? req.body?.position_id);
+
+  if (!userId || !departmentId || !positionId) {
+    return res.status(400).send({
+      message: "userId, departmentId, and positionId are required.",
+    });
+  }
+
+  try {
+    const actorUserId = req.auth?.userId;
+    const actorEmail = req.auth?.email;
+    const canManage = await canManageDepartment(actorUserId, actorEmail, departmentId);
+    if (!canManage) {
+      return res.status(403).send({
+        message: "Forbidden! You can only manage users in your departments.",
+      });
+    }
+
+    const membership = await UserDepartment.findOne({
+      where: {
+        user_id: userId,
+        department_id: departmentId,
+        position_id: positionId,
+        is_active: true,
+      },
+      order: [["ud_id", "DESC"]],
+    });
+
+    if (!membership) {
+      return res.status(404).send({
+        message: "No active membership found for this user, department, and position.",
+      });
+    }
+
+    membership.is_active = false;
+    membership.deactivated_at = new Date();
+    await membership.save();
+
+    return res.status(200).send({
+      message: "Worker removed from position successfully.",
+      data: membership,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err.message || "Some error occurred while removing worker from position.",
+    });
+  }
+};
+
 export default exports;

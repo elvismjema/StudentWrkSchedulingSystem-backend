@@ -38,6 +38,13 @@ router.post("/admin/assign-role", [authenticate, requireManager], userDepartment
 // Manager: Add or reactivate worker membership in managed department
 router.post("/assign-worker", [authenticate, requireManager], userDepartment.assignWorker);
 
+// Manager: Add a worker to an additional position (multi-position support).
+// Additive: does not remove other positions the worker already holds.
+router.post("/add-worker-position", [authenticate, requireManager], userDepartment.addWorkerPosition);
+
+// Manager: Remove a worker from one specific position, leaving others intact.
+router.post("/remove-worker-position", [authenticate, requireManager], userDepartment.removeWorkerPosition);
+
 // Admin: Remove user role from department
 router.delete("/admin/remove-role/:id", [authenticate, requireManager], userDepartment.removeUserRole);
 
