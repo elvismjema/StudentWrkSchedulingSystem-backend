@@ -143,6 +143,29 @@ describe("shift assignment validation", () => {
     expect(res.status).not.toHaveBeenCalledWith(409);
   });
 
+  test("blocks assignment when student already has an overlapping shift", async () => {
+    mockShift.findByPk.mockResolvedValue(baselineShift());
+    mockShift.findAll.mockResolvedValueOnce([
+      {
+        shift_id: 22,
+        assigned_user_id: 42,
+        shift_date: "2026-04-20",
+        start_time: "10:30:00",
+        end_time: "12:00:00",
+        trade_status: null,
+      },
+    ]);
+    mockAvailability.findAll.mockResolvedValue([]);
+
+    const res = mockRes();
+    await updateShift(assignPayload(), res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    const payload = res.send.mock.calls[0][0];
+    expect(payload.conflictType).toBe("shift_overlap");
+    expect(payload.message).toBe("This student already has a shift at this time.");
+  });
+
   test("blocks assignment during a class-schedule window", async () => {
     mockShift.findByPk.mockResolvedValue(baselineShift());
     // The orchestrator calls validateApprovedTimeOffCoverage first (no
