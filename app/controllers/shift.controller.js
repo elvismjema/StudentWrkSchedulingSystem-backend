@@ -407,6 +407,62 @@ const validateApprovedTimeOffCoverage = async (userId, shiftDate) => {
   return { valid: true };
 };
 
+const validateNoAssignedShiftOverlap = async (
+  userId,
+  shiftDate,
+  startTime,
+  endTime,
+  excludeShiftId = null,
+) => {
+  const isoDate = toIsoDate(shiftDate);
+  const shiftStart = toMinutes(startTime);
+  const shiftEnd = toMinutes(endTime);
+
+  if (!isoDate || shiftStart === null || shiftEnd === null || shiftEnd <= shiftStart) {
+    return {
+      valid: false,
+      message: "Unable to validate shift overlap: shift date or time is invalid.",
+      conflictType: "invalid_shift_window",
+    };
+  }
+
+  const where = {
+    assigned_user_id: userId,
+    shift_date: isoDate,
+    [Op.or]: [
+      { trade_status: null },
+      { trade_status: { [Op.notIn]: [SHIFT_STATUS.CANCELLED, "approved_cover"] } },
+    ],
+  };
+
+  if (excludeShiftId) {
+    where.shift_id = { [Op.ne]: Number(excludeShiftId) };
+  }
+
+  const assignedShifts = await Shift.findAll({
+    where,
+    order: [["start_time", "ASC"]],
+  });
+
+  const conflictingShift = assignedShifts.find((shift) => {
+    const existingStart = toMinutes(shift.start_time);
+    const existingEnd = toMinutes(shift.end_time);
+    if (existingStart === null || existingEnd === null) return false;
+    return intervalsOverlap(shiftStart, shiftEnd, existingStart, existingEnd);
+  });
+
+  if (conflictingShift) {
+    return {
+      valid: false,
+      message: "This student already has a shift at this time.",
+      conflictType: "shift_overlap",
+      conflictingShiftId: conflictingShift.shift_id,
+    };
+  }
+
+  return { valid: true };
+};
+
 const validateAssignmentEligibility = async (
   departmentId,
   assignedUserId,
@@ -414,6 +470,7 @@ const validateAssignmentEligibility = async (
   shiftDate,
   startTime,
   endTime,
+  excludeShiftId = null,
 ) => {
   if (!assignedUserId) {
     return { valid: true };
@@ -438,6 +495,22 @@ const validateAssignmentEligibility = async (
   if (!departmentValidation.valid) {
     logger.info("[ShiftAssign] blocked: department", { ...ctx, reason: departmentValidation.conflictType });
     return departmentValidation;
+  }
+
+  const shiftOverlapValidation = await validateNoAssignedShiftOverlap(
+    assignedUserId,
+    shiftDate,
+    startTime,
+    endTime,
+    excludeShiftId,
+  );
+  if (!shiftOverlapValidation.valid) {
+    logger.info("[ShiftAssign] blocked: shift_overlap", {
+      ...ctx,
+      reason: shiftOverlapValidation.conflictType,
+      conflictingShiftId: shiftOverlapValidation.conflictingShiftId,
+    });
+    return shiftOverlapValidation;
   }
 
   const timeOffValidation = await validateApprovedTimeOffCoverage(
@@ -794,6 +867,7 @@ export const createShift = async (req, res) => {
         req.body.shift_date,
         req.body.start_time,
         req.body.end_time,
+        null,
       );
 
       if (!assignmentValidation.valid) {
@@ -1042,6 +1116,7 @@ export const updateShift = async (req, res) => {
         shiftDate,
         startTime,
         endTime,
+        id,
       );
 
       if (!assignmentValidation.valid) {
