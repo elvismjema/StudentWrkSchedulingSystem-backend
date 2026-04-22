@@ -1108,10 +1108,21 @@ export const approveAllManagerTimecards = async (req, res) => {
     });
 
     const now = new Date();
-    const targetUserDeptPairs = targets.map((m) => ({
-      user_id: Number(m.user_id),
-      department_id: Number(m.department_id),
-    }));
+    // Dedupe (user_id, department_id) pairs. Multi-position support means
+    // a single worker can have multiple UserDepartment rows for the same
+    // department (one per position); without dedupe, bulkCreate would hit
+    // the (user_id, department_id, period_start, period_end) unique index
+    // and throw SequelizeUniqueConstraintError ("Validation error").
+    const seenPairs = new Set();
+    const targetUserDeptPairs = [];
+    for (const m of targets) {
+      const user_id = Number(m.user_id);
+      const department_id = Number(m.department_id);
+      const key = `${user_id}:${department_id}`;
+      if (seenPairs.has(key)) continue;
+      seenPairs.add(key);
+      targetUserDeptPairs.push({ user_id, department_id });
+    }
 
     if (!targetUserDeptPairs.length) {
       return res.send({ message: "No eligible workers to approve.", updated_count: 0 });
@@ -1161,8 +1172,37 @@ export const approveAllManagerTimecards = async (req, res) => {
       updated_count: updatedCount,
     });
   } catch (error) {
+    // Sequelize validation / unique-constraint errors have a generic top-level
+    // message ("Validation error") and carry the real details in error.errors
+    // and error.original. Surface those so the UI can show something useful
+    // instead of a useless "Validation error" toast.
+    const details = Array.isArray(error?.errors) && error.errors.length
+      ? error.errors.map((e) => {
+          const parts = [e?.message];
+          if (e?.path) parts.push(`(field: ${e.path})`);
+          return parts.filter(Boolean).join(" ");
+        }).join("; ")
+      : "";
+    const originalMessage = error?.original?.message || error?.parent?.message || "";
+    const composed = [error?.message, details, originalMessage]
+      .map((s) => (s || "").trim())
+      .filter(Boolean)
+      .join(" — ");
+
+    // Log the full error server-side for debugging (stack + SQL when present).
+    console.error("[approveAllManagerTimecards] failed:", {
+      name: error?.name,
+      message: error?.message,
+      details,
+      original: error?.original?.message,
+      sql: error?.sql,
+      stack: error?.stack,
+    });
+
     return res.status(500).send({
-      message: `Error approving all timecards: ${error.message}`,
+      message: `Error approving all timecards: ${composed || "unknown error"}`,
+      error_name: error?.name || undefined,
+      error_details: details || undefined,
     });
   }
 };
