@@ -5,6 +5,8 @@ const findDepartmentIdFromRequest = async (req) => {
   if (req.body?.department_id) return Number(req.body.department_id);
   if (req.body?.departmentId) return Number(req.body.departmentId);
   if (req.params?.departmentId) return Number(req.params.departmentId);
+  if (req.query?.department_id) return Number(req.query.department_id);
+  if (req.query?.departmentId) return Number(req.query.departmentId);
 
   const routePath = `${req.baseUrl || ""}${req.path || ""}`.toLowerCase();
 
