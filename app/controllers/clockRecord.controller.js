@@ -202,27 +202,54 @@ const buildTimecardRows = async ({ userIds, departmentIds, periodStartStr, perio
     hoursByUserId.set(userId, current + getWorkedHours(record.clock_in, record.clock_out));
   });
 
-  return workerIds.map((workerId) => {
+  /*
+    Row-visibility rules (server-side, to keep the Time & Pay page clean):
+
+    • Skip "ghost" memberships — UserDepartment rows that still reference a
+      user_id whose User record has been deleted. These previously rendered
+      as "Unknown Worker · 0.0h" on the manager's table and added pure noise.
+    • Skip idle workers — active members who logged zero hours in the period
+      AND have no existing approval record. If a manager has already opened
+      or actioned the row (pending/approved/rejected), we still surface it
+      so their work isn't lost.
+
+    This is additive: callers that need the raw list can iterate approvals or
+    memberships directly. No schema changes; no data mutation.
+  */
+  const rows = [];
+  workerIds.forEach((workerId) => {
     const departmentId = workerDeptByUserId.get(workerId);
     const key = `${workerId}:${departmentId}:${periodStartStr}:${periodEndStr}`;
     const user = userById.get(workerId);
+
+    // Skip orphaned memberships — the user was deleted but the membership
+    // row was left behind. Nothing to approve here.
+    if (!user) return;
+
     const split = splitHours(hoursByUserId.get(workerId) || 0);
-    return {
+    const hasApprovalRecord = approvalMap.has(key);
+    const hasHours = Number(split.totalHours || 0) > 0;
+
+    // Skip idle rows: no hours this period and no manager action yet.
+    if (!hasHours && !hasApprovalRecord) return;
+
+    rows.push({
       user_id: workerId,
       department_id: departmentId,
       worker: {
         id: workerId,
-        fName: user?.fName || "Unknown",
-        lName: user?.lName || "Worker",
-        email: user?.email || "",
+        fName: user.fName || "",
+        lName: user.lName || "",
+        email: user.email || "",
       },
       regular_hours: split.regularHours,
       overtime_hours: split.overtimeHours,
       total_hours: split.totalHours,
       estimated_pay: split.estimatedPay,
       status: approvalMap.get(key) || "pending",
-    };
+    });
   });
+  return rows;
 };
 
 const createTimeDiscrepancyIfNeeded = async ({
